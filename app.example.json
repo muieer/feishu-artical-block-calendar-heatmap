@@ -1,0 +1,17 @@
+{
+  "manifestVersion": 1,
+  "appID": "",
+  "appType": "docs-addon",
+  "blockTypeID": "",
+  "projectName": "feishu-artical-calendar-heatmap",
+  "contributes": {
+    "addPanel": {
+      "initialHeight": 260,
+      "view": "index.html",
+      "resizeType": "none",
+      "useHostLoading": false,
+      "useInteraction": false
+    }
+  },
+  "url": ""
+}

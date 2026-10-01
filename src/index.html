@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>日历热力图</title>
+</head>
+
+<body>
+  <main class="heatmap-card">
+    <div class="header">
+      <h1>日历热力图</h1>
+      <span class="note">静态示例 · 2026</span>
+    </div>
+    <div class="chart-scroll">
+      <div class="chart">
+        <div id="months" class="months" aria-hidden="true"></div>
+        <div class="calendar">
+          <div class="weekdays" aria-hidden="true">
+            <span></span><span>一</span><span></span><span>三</span>
+            <span></span><span>五</span><span></span>
+          </div>
+          <div id="heatmap" class="grid" role="img"
+            aria-label="2026 年 4 月 5 日至 10 月 3 日的静态示例热力图，7 行 26 列，颜色从浅灰到深绿表示 5 个活动等级。"></div>
+        </div>
+      </div>
+    </div>
+    <div class="legend" aria-label="活动等级从少到多">
+      <span>少</span>
+      <span class="cell level-0" aria-hidden="true"></span>
+      <span class="cell level-1" aria-hidden="true"></span>
+      <span class="cell level-2" aria-hidden="true"></span>
+      <span class="cell level-3" aria-hidden="true"></span>
+      <span class="cell level-4" aria-hidden="true"></span>
+      <span>多</span>
+    </div>
+  </main>
+</body>
+
+</html>
