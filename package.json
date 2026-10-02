@@ -6,6 +6,7 @@
     "start": "cross-env NODE_ENV=development webpack-dev-server --mode development",
     "start:preview": "cross-env LOCAL_PREVIEW=1 NODE_ENV=development webpack-dev-server --mode development",
     "build": "cross-env CI_FLAG=1 NODE_ENV=production webpack --mode production",
+    "test": "node --test test/*.test.mjs test/*.test.cjs",
     "upload": "npm run build && opdev upload ./dist"
   },
   "devDependencies": {
@@ -18,5 +19,8 @@
     "webpack": "^5.75.0",
     "webpack-cli": "^5.0.1",
     "webpack-dev-server": "^4.11.1"
+  },
+  "dependencies": {
+    "@lark-opdev/block-docs-addon-api": "0.0.11"
   }
 }

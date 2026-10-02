@@ -89,3 +89,23 @@ h1 { margin: 0; font-size: 14px; font-weight: 600; }
 }
 
 .legend .cell { width: 10px; height: 10px; }
+
+.cell.pending { outline: 1px solid #0969da; outline-offset: 1px; }
+.cell.future { opacity: 0.35; }
+.explanation { color: #656d76; font-size: 11px; line-height: 1.6; margin: 12px 0; }
+.debug { border-top: 1px solid #d0d7de; margin-top: 16px; padding-top: 12px; font-size: 12px; }
+h2, h3 { font-size: 12px; margin: 0 0 10px; }
+h3 { margin-top: 16px; }
+#status { line-height: 1.6; overflow-wrap: anywhere; }
+.error { color: #b42318; }
+.metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 12px 0; }
+.metrics div { min-width: 0; }
+dt { color: #656d76; font-size: 11px; }
+dd { margin: 4px 0 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 5px 6px; border-bottom: 1px solid #eaeef2; }
+th { color: #656d76; font-size: 11px; font-weight: 500; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 11px; color: #656d76; }
+button { padding: 5px 8px; border: 1px solid #d0d7de; border-radius: 5px; background: #f6f8fa; color: #1f2328; font: inherit; cursor: pointer; }
+button:disabled { opacity: 0.5; cursor: default; }
+@media (max-width: 360px) { .header { flex-wrap: wrap; gap: 6px; } .metrics { grid-template-columns: 1fr; } }

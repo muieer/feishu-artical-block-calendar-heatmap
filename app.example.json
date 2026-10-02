@@ -6,11 +6,11 @@
   "projectName": "feishu-artical-calendar-heatmap",
   "contributes": {
     "addPanel": {
-      "initialHeight": 260,
+      "initialHeight": 900,
       "view": "index.html",
       "resizeType": "none",
       "useHostLoading": false,
-      "useInteraction": false
+      "useInteraction": true
     }
   },
   "url": ""
