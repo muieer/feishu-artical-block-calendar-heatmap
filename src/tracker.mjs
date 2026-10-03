@@ -1,10 +1,12 @@
-import { STATE_KEY, advanceActivity, localDate, revisionNumber, validateState } from './activity.mjs';
+import { STATE_KEY, advanceActivity, localDate, recordContribution, validateState } from './activity.mjs';
+import { CONTRIBUTION_IDLE_MS } from './idle.mjs';
 
-// Observations advance in memory; only save persists the accumulated state.
-export function createTracker({ readData, writeData, readRevision, now = () => new Date() }) {
+// Count each editing session once; failed writes retry the same state.
+export function createTracker({ readData, writeData, now = () => new Date(), onChange = () => {} }) {
   let state = null;
   let saved = null;
   let loaded = false;
+  let replaceRoot = false;
   let tail = Promise.resolve();
 
   function run(operation) {
@@ -13,46 +15,74 @@ export function createTracker({ readData, writeData, readRevision, now = () => n
     return result;
   }
 
-  function snapshot(notice = '', extra = {}) {
-    return { state, revision: state?.latestRevision ?? null, today: localDate(now()),
-      savedRevision: saved?.latestRevision ?? null, notice, ...extra };
+  function snapshot() {
+    return { state: state && structuredClone(state), today: localDate(now()),
+      savedContributions: saved?.latestContributions ?? null, loaded };
   }
 
-  async function observe(canApply = () => true) {
-    const revision = revisionNumber(await readRevision());
-    const today = localDate(now());
-    if (!loaded) {
-      try {
-        const data = await readData();
-        saved = validateState(data[STATE_KEY]);
-        state = saved;
-        loaded = true;
-      } catch (error) {
-        error.observation = { revision, today, savedRevision: null };
-        throw error;
-      }
+  function publish() { onChange(snapshot()); }
+
+  async function load() {
+    if (loaded) return;
+    const data = await readData();
+    saved = validateState(data[STATE_KEY]);
+    state = advanceActivity(saved ?? undefined, localDate(now())).state;
+    if (state.pendingContribution && now().getTime() - state.pendingContribution.lastChangedAt >= CONTRIBUTION_IDLE_MS) {
+      delete state.pendingContribution;
     }
-    if (!canApply()) return snapshot('', { cancelled: true });
-    const result = advanceActivity(state, today, revision);
-    state = result.state;
-    return snapshot(result.notice);
+    replaceRoot = Object.keys(data).some(key => key !== STATE_KEY);
+    loaded = true;
+    publish();
+  }
+
+  async function persist() {
+    if (!replaceRoot && JSON.stringify(saved) === JSON.stringify(state)) return { ...snapshot(), written: false };
+    const pending = structuredClone(state);
+    await writeData(STATE_KEY, pending);
+    saved = pending;
+    replaceRoot = false;
+    publish();
+    return { ...snapshot(), written: true };
+  }
+
+  function presaveSession(session) {
+    if (state.pendingContribution?.id !== session.id) {
+      state = recordContribution(state, session.date, localDate(now()));
+    }
+    // Keep the first recorded date when an editing session crosses midnight.
+    state = { ...state, pendingContribution: { ...session, date: state.pendingContribution?.id === session.id
+      ? state.pendingContribution.date : session.date } };
+    publish();
   }
 
   return {
-    refresh: ({ canApply } = {}) => run(() => observe(canApply)),
-    save: ({ canSave = () => true } = {}) => run(async () => {
-      // Cancel queued attempts before reading, and recheck after awaited reads.
-      if (!canSave()) return snapshot('', { cancelled: true });
-      const result = await observe(canSave);
-      if (result.cancelled || !canSave()) return snapshot('', { cancelled: true });
-      const unchanged = JSON.stringify(saved) === JSON.stringify(state);
-      if (!unchanged) {
-        const pending = structuredClone(state);
-        // Once issued, a write completes even if editing resumes.
-        await writeData(STATE_KEY, pending);
-        saved = pending;
-      }
-      return snapshot(result.notice, { written: !unchanged });
+    snapshot,
+    load: () => run(async () => { await load(); return snapshot(); }),
+    save: () => run(async () => { await load(); return persist(); }),
+    presave: session => run(async () => {
+      await load();
+      presaveSession(session);
+      return persist();
+    }),
+    touch: session => run(async () => {
+      await load();
+      if (state.pendingContribution?.id !== session.id) return { ...snapshot(), written: false };
+      state = { ...state, pendingContribution: { ...state.pendingContribution, lastChangedAt: session.lastChangedAt } };
+      publish();
+      return persist();
+    }),
+    confirm: session => run(async () => {
+      await load();
+      presaveSession(session);
+      delete state.pendingContribution;
+      publish();
+      return persist();
+    }),
+    rollover: () => run(async () => {
+      await load();
+      state = advanceActivity(state, localDate(now())).state;
+      publish();
+      return persist();
     }),
   };
 }

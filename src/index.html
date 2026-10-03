@@ -35,25 +35,25 @@
       <span class="cell level-4" aria-hidden="true"></span>
       <span>多</span>
     </div>
-    <p class="explanation">每格一个自然日。颜色表示已结算的 revision 增量；今天 pending。revision 增量是编辑活跃度指标，不等同于编辑次数。</p>
-    <section class="debug" aria-labelledby="debug-title">
-      <h2 id="debug-title">开发验证</h2>
-      <p>闲置 <span id="idle-seconds">0</span> 秒</p>
+    <p class="explanation">每格一个自然日。颜色表示贡献次数，今天随贡献次数更新颜色；蓝色轮廓表示当天未结算。最后一次文档变化后空闲 10 秒预保存一次贡献，连续空闲 60 秒后结束本次编辑。</p>
+    <details class="debug" aria-labelledby="debug-title">
+      <summary id="debug-title">开发验证</summary>
+      <p>闲置 <span id="idle-seconds">—</span> 秒</p>
       <p id="status" role="status" aria-live="polite">正在连接飞书文档…</p>
       <dl class="metrics">
-        <div><dt>内存 revision_id</dt><dd id="latest-revision">—</dd></div>
-        <div><dt>Interaction 已保存 revision_id</dt><dd id="saved-revision">—</dd></div>
-        <div><dt>当日基准 revision_id</dt><dd id="baseline-revision">—</dd></div>
-        <div><dt>当日实时增量 · pending</dt><dd id="live-delta">—</dd></div>
+        <div><dt>当日基线贡献次数</dt><dd id="baseline-contributions">—</dd></div>
+        <div><dt>最新贡献次数</dt><dd id="latest-contributions">—</dd></div>
+        <div><dt>Interaction 已保存贡献次数</dt><dd id="saved-contributions">—</dd></div>
+        <div><dt>当日贡献次数 · pending</dt><dd id="live-delta">—</dd></div>
         <div><dt>当前统计日期</dt><dd id="current-date">—</dd></div>
         <div><dt>首次启用日期</dt><dd id="started-on">—</dd></div>
         <div><dt>用户本地时区</dt><dd id="timezone">—</dd></div>
       </dl>
       <h3>最近 7 个自然日</h3>
-      <table><thead><tr><th>日期</th><th>revision 增量</th><th>状态</th></tr></thead><tbody id="recent-days"></tbody></table>
-      <p class="explanation">停止编辑 10 秒后更新内存 revision；停止编辑 60 秒后保存到 Interaction。保存期间继续编辑，会在下一次闲置后同步。</p>
-      <div class="actions"><button id="refresh" type="button" disabled>刷新 revision</button><button id="save" type="button" disabled>最新 revision 保存到 Interaction</button><span>最近更新：<span id="updated-at">—</span></span></div>
-    </section>
+      <table><thead><tr><th>日期</th><th>贡献次数</th><th>状态</th></tr></thead><tbody id="recent-days"></tbody></table>
+      <p class="explanation">空闲 10 秒时贡献加 1 并预保存到 Interaction；60 秒内继续编辑仍计为同一次，连续空闲 60 秒后结束。保存失败会自动重试；pending 表示当天未结算。</p>
+      <p class="note">最近保存检查：<span id="updated-at">—</span></p>
+    </details>
   </main>
 </body>
 

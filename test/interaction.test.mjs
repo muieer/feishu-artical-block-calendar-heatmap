@@ -46,8 +46,8 @@ test('无效返回值不能当作首次启用；恢复正常后可以重试', as
   assert.deepEqual(await storage.readData(), {});
 });
 
-test('存储只替换指定路径，保留其它数据', async () => {
+test('存储以官方 setData 替换根，只保存新的贡献结构', async () => {
   const { storage, calls } = fixture();
-  await storage.writeData('revisionHeatmapV1', { version: 1 });
-  assert.deepEqual(calls.writes, [{ type: 'replace', data: { path: ['revisionHeatmapV1'], value: { version: 1 } } }]);
+  await storage.writeData('contributionHeatmapV1', { version: 1 });
+  assert.deepEqual(calls.writes, [{ type: 'replace', data: { path: [], value: { contributionHeatmapV1: { version: 1 } } } }]);
 });

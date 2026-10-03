@@ -1,145 +1,178 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createTracker } from '../src/tracker.mjs';
-import { STATE_KEY } from '../src/activity.mjs';
+import { STATE_KEY, dayActivity } from '../src/activity.mjs';
 
-function fixture() {
-  const context = { data: {}, revision: 100, day: '2026-10-01', writes: [] };
-  const dependencies = {
-    readData: async () => structuredClone(context.data),
-    readRevision: async () => context.revision,
+let nextSession = 0;
+const session = date => ({ id: `session-${++nextSession}`, date, lastChangedAt: new Date(date + 'T12:00:00').getTime() });
+
+function fixture(data = {}) {
+  const context = { data, day: '2026-10-01', writes: [], observations: [], fail: false, readFail: false };
+  const tracker = createTracker({
+    readData: async () => { if (context.readFail) throw new Error('read failed'); return structuredClone(context.data); },
     writeData: async (key, value) => {
+      if (context.fail) throw new Error('write failed');
+      context.data = { [key]: structuredClone(value) };
       context.writes.push(structuredClone(value));
-      context.data[key] = structuredClone(value);
     },
-    now: () => new Date(`${context.day}T12:00:00`),
-  };
-  return { context, dependencies, tracker: createTracker(dependencies) };
-}
-
-function deferred() {
-  let resolve;
-  const promise = new Promise(done => { resolve = done; });
-  return { promise, resolve };
-}
-
-test('刷新只更新内存，保存更新 Interaction；重新加载保留基准', async () => {
-  const { context, tracker, dependencies } = fixture();
-  const first = await tracker.refresh();
-  assert.equal(first.savedRevision, null);
-  assert.equal(context.writes.length, 0);
-  context.revision = 120;
-  const live = await tracker.refresh();
-  assert.equal(live.revision, 120);
-  assert.equal(live.state.baselineRevision, 100);
-  assert.equal(context.writes.length, 0);
-  assert.equal((await tracker.save()).savedRevision, 120);
-  const reloaded = await createTracker(dependencies).refresh();
-  assert.equal(reloaded.state.baselineRevision, 100);
-  await tracker.save();
-  assert.equal(context.writes.length, 1);
-});
-
-test('跨日首次观察的结算保留到延迟保存，不把后续编辑计入前一天', async () => {
-  const { context, tracker } = fixture();
-  await tracker.refresh();
-  context.day = '2026-10-02';
-  context.revision = 125;
-  await tracker.refresh();
-  context.revision = 140;
-  await tracker.save();
-  assert.equal(context.data[STATE_KEY].baselineRevision, 125);
-  assert.deepEqual(context.data[STATE_KEY].history, { '2026-10-01': 25 });
-  assert.equal(context.data[STATE_KEY].latestRevision, 140);
-});
-
-test('旧 blocked 标记不再阻止统计，也不重置已有历史', async () => {
-  const { context, dependencies, tracker } = fixture();
-  await tracker.save();
-  context.data.revisionHeatmapWriteGuard = { status: 'blocked' };
-  context.revision = 125;
-  context.day = '2026-10-03';
-  const other = createTracker(dependencies);
-  const result = await other.save();
-  assert.equal(result.savedRevision, 125);
-  assert.deepEqual(result.state.history, { '2026-10-01': 25, '2026-10-02': 0 });
-  assert.equal(context.writes.length, 2);
-});
-
-test('读取 Interaction 失败提供观察值但不初始化或写入，恢复后可重试', async () => {
-  const { context, dependencies } = fixture();
-  let failing = true;
-  dependencies.readData = async () => {
-    if (failing) throw new Error('storage unavailable');
-    return context.data;
-  };
-  const tracker = createTracker(dependencies);
-  await assert.rejects(tracker.save(), error => {
-    assert.equal(error.observation.revision, 100);
-    return /storage unavailable/.test(error.message);
+    now: () => new Date(context.day + 'T12:00:00'),
+    onChange: result => context.observations.push(result),
   });
-  assert.equal(context.writes.length, 0);
-  failing = false;
-  assert.equal((await tracker.save()).savedRevision, 100);
-});
+  return { context, tracker };
+}
 
-test('保存请求发出前恢复编辑取消本次保存和观察', async () => {
-  const { context, dependencies } = fixture();
-  const gate = deferred();
-  const entered = deferred();
-  dependencies.readRevision = async () => { entered.resolve(); await gate.promise; return 120; };
-  const tracker = createTracker(dependencies);
-  let idle = true;
-  const saving = tracker.save({ canSave: () => idle });
-  await entered.promise;
-  idle = false;
-  gate.resolve();
-  assert.equal((await saving).cancelled, true);
-  assert.equal(context.writes.length, 0);
-});
-
-test('已发出的写入完成，继续编辑后的下一轮保存最新 revision', async () => {
-  const { context, dependencies } = fixture();
-  const gate = deferred();
-  const entered = deferred();
-  const write = dependencies.writeData;
-  dependencies.writeData = async (...args) => { entered.resolve(); await gate.promise; await write(...args); };
-  const tracker = createTracker(dependencies);
-  let idle = true;
-  const saving = tracker.save({ canSave: () => idle });
-  await entered.promise;
-  idle = false;
-  context.revision = 130;
-  gate.resolve();
-  assert.equal((await saving).savedRevision, 100);
-  assert.equal(context.data[STATE_KEY].latestRevision, 100);
-  idle = true;
-  const result = await tracker.save({ canSave: () => idle });
-  assert.equal(result.savedRevision, 130);
-  assert.equal(result.state.baselineRevision, 100);
-  assert.equal(context.data.revisionHeatmapWriteGuard, undefined);
-});
-
-test('失败的写入不冒充已保存，后续重试保持内存基准', async () => {
-  const { context, dependencies } = fixture();
-  const write = dependencies.writeData;
-  let failing = true;
-  dependencies.writeData = async (...args) => {
-    if (failing) throw new Error('write failed');
-    await write(...args);
-  };
-  const tracker = createTracker(dependencies);
-  await assert.rejects(tracker.save(), /write failed/);
-  context.revision = 130;
-  assert.equal((await tracker.refresh()).savedRevision, null);
-  failing = false;
-  const result = await tracker.save();
-  assert.equal(result.savedRevision, 130);
-  assert.equal(result.state.baselineRevision, 100);
-});
-
-test('并发刷新和保存串行执行，各自完成所请求的操作', async () => {
+test('首次启用保存零贡献，刷新接续已保存累计和基线', async () => {
   const { context, tracker } = fixture();
-  await Promise.all([tracker.refresh(), tracker.save(), tracker.save()]);
-  assert.equal(context.writes.length, 1);
+  await tracker.load();
+  await tracker.save();
+  await tracker.confirm(session(context.day));
+  const { tracker: reopened } = fixture(context.data);
+  const result = await reopened.load();
+  assert.equal(result.state.latestContributions, 1);
+  assert.equal(result.state.baselineContributions, 0);
+  assert.equal(result.savedContributions, 1);
+  assert.equal((await reopened.save()).written, false);
+});
+
+test('新状态保存替换存储根，不保留其它格式数据', async () => {
+  const { context, tracker } = fixture({ obsoleteStatistics: { count: 999 }, obsoleteGuard: true });
+  await tracker.load();
+  await tracker.save();
+  assert.deepEqual(Object.keys(context.data), [STATE_KEY]);
+  assert.equal(context.data[STATE_KEY].latestContributions, 0);
+});
+
+test('保存失败后内存贡献保留，重试不会再次计数', async () => {
+  const { context, tracker } = fixture();
+  await tracker.save();
+  context.fail = true;
+  await assert.rejects(tracker.confirm(session(context.day)), /write failed/);
+  assert.equal(tracker.snapshot().state.latestContributions, 1);
+  assert.equal(tracker.snapshot().savedContributions, 0);
+  context.fail = false;
+  await tracker.save();
+  assert.equal(tracker.snapshot().savedContributions, 1);
+  assert.equal(tracker.snapshot().state.latestContributions, 1);
+  assert.equal((await tracker.save()).written, false);
+});
+
+test('保存失败期间下一段贡献继续累计，后续一次写入保存全部', async () => {
+  const { context, tracker } = fixture();
+  await tracker.save();
+  context.fail = true;
+  await assert.rejects(tracker.confirm(session(context.day)));
+  await assert.rejects(tracker.confirm(session(context.day)));
+  context.fail = false;
+  await tracker.save();
+  assert.equal(context.data[STATE_KEY].latestContributions, 2);
+});
+
+test('读取失败或新结构损坏不能当作首次启用覆盖数据', async () => {
+  const { context, tracker } = fixture();
+  context.readFail = true;
+  await assert.rejects(tracker.save(), /read failed/);
+  assert.equal(tracker.snapshot().loaded, false);
+  assert.deepEqual(context.writes, []);
+  context.readFail = false;
+  await tracker.save();
+  const broken = fixture({ [STATE_KEY]: { version: 1 } });
+  await assert.rejects(broken.tracker.save(), /格式/);
+  assert.deepEqual(broken.context.writes, []);
+});
+
+test('跨日结算保存不会凭空增加贡献，基线和历史可恢复', async () => {
+  const { context, tracker } = fixture();
+  await tracker.confirm(session(context.day));
+  context.day = '2026-10-04';
+  const result = await tracker.rollover();
+  assert.equal(result.state.latestContributions, 1);
+  assert.equal(result.state.baselineContributions, 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(result.state.history)), { '2026-10-01': 1, '2026-10-02': 0, '2026-10-03': 0 });
+  assert.equal(dayActivity(result.state, context.day, context.day).delta, 0);
+});
+
+test('慢写入期间的下一段确认串行处理，累计和保存不会被旧结果覆盖', async () => {
+  let release;
+  let entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  const writes = [];
+  const tracker = createTracker({
+    readData: async () => ({}), now: () => new Date(2026, 9, 1, 12),
+    writeData: async (key, state) => {
+      writes.push(state.latestContributions);
+      if (writes.length === 1) { entered(); await gate; }
+    },
+  });
+  const first = tracker.confirm(session('2026-10-01'));
+  await started;
+  const second = tracker.confirm(session('2026-10-01'));
+  assert.equal(tracker.snapshot().state.latestContributions, 1);
+  assert.equal(tracker.snapshot().savedContributions, null);
+  release();
+  await Promise.all([first, second]);
+  assert.deepEqual(writes, [1, 2]);
+  assert.equal(tracker.snapshot().savedContributions, 2);
+});
+
+test('快照由独立副本组成，界面读取不会改写统计', async () => {
+  const { tracker } = fixture();
+  const result = await tracker.load();
+  result.state.latestContributions = 999;
+  assert.equal(tracker.snapshot().state.latestContributions, 0);
+});
+
+test('预保存失败后继续编辑、再次预保存和最终确认都不会重复增加', async () => {
+  const { context, tracker } = fixture();
+  await tracker.save();
+  const editing = session(context.day);
+  context.fail = true;
+  await assert.rejects(tracker.presave(editing), /write failed/);
+  await assert.rejects(tracker.touch({ ...editing, lastChangedAt: editing.lastChangedAt + 20000 }));
+  await assert.rejects(tracker.presave({ ...editing, lastChangedAt: editing.lastChangedAt + 20000 }));
+  assert.equal(tracker.snapshot().state.latestContributions, 1);
+  context.fail = false;
+  await tracker.confirm({ ...editing, lastChangedAt: editing.lastChangedAt + 20000 });
+  assert.equal(context.data[STATE_KEY].latestContributions, 1);
+  assert.equal(context.data[STATE_KEY].pendingContribution, undefined);
+});
+
+test('慢预保存期间继续编辑，后续时间更新和确认接续同一笔贡献', async () => {
+  let release;
+  let entered;
+  const gate = new Promise(resolve => { release = resolve; });
+  const started = new Promise(resolve => { entered = resolve; });
+  const writes = [];
+  const tracker = createTracker({
+    readData: async () => ({}), now: () => new Date(2026, 9, 1, 12),
+    writeData: async (key, state) => {
+      writes.push(structuredClone(state));
+      if (writes.length === 1) { entered(); await gate; }
+    },
+  });
+  const editing = session('2026-10-01');
+  const first = tracker.presave(editing);
+  await started;
+  const continued = { ...editing, lastChangedAt: editing.lastChangedAt + 40000 };
+  const touched = tracker.touch(continued);
+  const updated = tracker.presave(continued);
+  const finished = tracker.confirm(continued);
+  release();
+  await Promise.all([first, touched, updated, finished]);
+  assert.ok(writes.every(state => state.latestContributions === 1));
+  assert.equal(writes[1].pendingContribution.lastChangedAt, continued.lastChangedAt);
+  assert.equal(writes.at(-1).pendingContribution, undefined);
+});
+
+test('跨日恢复预保存贡献，继续编辑仍归属原日期且不重复计数', async () => {
+  const { context, tracker } = fixture();
+  const editing = session(context.day);
+  await tracker.presave(editing);
+  context.day = '2026-10-02';
+  await tracker.rollover();
+  await tracker.touch({ ...editing, lastChangedAt: editing.lastChangedAt + 86400000 });
+  await tracker.confirm({ ...editing, lastChangedAt: editing.lastChangedAt + 86400000 });
+  assert.equal(context.data[STATE_KEY].latestContributions, 1);
+  assert.equal(context.data[STATE_KEY].history['2026-10-01'], 1);
+  assert.equal(dayActivity(context.data[STATE_KEY], context.day, context.day).delta, 0);
 });
