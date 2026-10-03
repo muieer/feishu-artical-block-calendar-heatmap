@@ -107,6 +107,14 @@ h1 { margin: 0; font-size: 15px; line-height: 1.5; font-weight: 600; }
 .debug { border-top: 1px solid #eaeef2; margin-top: 16px; padding-top: 12px; font-size: 12px; }
 .debug summary { cursor: pointer; font-weight: 600; }
 .debug summary:focus-visible { outline: 2px solid #0969da; outline-offset: 4px; border-radius: 2px; }
+.contribution-rule-control { margin-top: 16px; }
+.contribution-rule-control p { margin: 0 0 8px; }
+.contribution-rules { display: flex; flex-wrap: wrap; gap: 8px; }
+.contribution-rules button { border: 1px solid #d0d7de; border-radius: 5px; padding: 4px 10px; background: #fff; color: #1f2328; font: inherit; font-size: 12px; line-height: 1.5; cursor: pointer; }
+.contribution-rules button:hover:not(:disabled) { background: #f6f8fa; border-color: #8c959f; }
+.contribution-rules button:disabled { color: #8c959f; background: #f6f8fa; cursor: default; }
+.contribution-rules button[aria-pressed="true"] { color: #fff; background: #0969da; border-color: #0969da; }
+.contribution-rules button:focus-visible { outline: 2px solid #0969da; outline-offset: 2px; }
 h2, h3 { font-size: 12px; margin: 0 0 10px; }
 h3 { margin-top: 16px; }
 #status { line-height: 1.6; overflow-wrap: anywhere; }

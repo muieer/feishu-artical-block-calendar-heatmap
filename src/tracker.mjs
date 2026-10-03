@@ -1,5 +1,5 @@
 import { STATE_KEY, advanceActivity, localDate, recordContribution, validateState } from './activity.mjs';
-import { CONTRIBUTION_IDLE_MS } from './idle.mjs';
+import { DEFAULT_CONTRIBUTION_IDLE_MINUTES, contributionIdleMs } from './contribution.mjs';
 
 // Count each editing session once; failed writes retry the same state.
 export function createTracker({ readData, writeData, now = () => new Date(), onChange = () => {} }) {
@@ -17,7 +17,8 @@ export function createTracker({ readData, writeData, now = () => new Date(), onC
 
   function snapshot() {
     return { state: state && structuredClone(state), today: localDate(now()),
-      savedContributions: saved?.latestContributions ?? null, loaded };
+      savedContributions: saved?.latestContributions ?? null,
+      savedContributionIdleMinutes: saved ? saved.contributionIdleMinutes ?? DEFAULT_CONTRIBUTION_IDLE_MINUTES : null, loaded };
   }
 
   function publish() { onChange(snapshot()); }
@@ -27,7 +28,7 @@ export function createTracker({ readData, writeData, now = () => new Date(), onC
     const data = await readData();
     saved = validateState(data[STATE_KEY]);
     state = advanceActivity(saved ?? undefined, localDate(now())).state;
-    if (state.pendingContribution && now().getTime() - state.pendingContribution.lastChangedAt >= CONTRIBUTION_IDLE_MS) {
+    if (state.pendingContribution && now().getTime() - state.pendingContribution.lastChangedAt >= contributionIdleMs(state.contributionIdleMinutes)) {
       delete state.pendingContribution;
     }
     replaceRoot = Object.keys(data).some(key => key !== STATE_KEY);
@@ -59,6 +60,14 @@ export function createTracker({ readData, writeData, now = () => new Date(), onC
     snapshot,
     load: () => run(async () => { await load(); return snapshot(); }),
     save: () => run(async () => { await load(); return persist(); }),
+    setContributionIdleMinutes: minutes => run(async () => {
+      contributionIdleMs(minutes);
+      await load();
+      if (state.contributionIdleMinutes === minutes) return { ...snapshot(), written: false };
+      state = { ...state, contributionIdleMinutes: minutes };
+      publish();
+      return persist();
+    }),
     presave: session => run(async () => {
       await load();
       presaveSession(session);

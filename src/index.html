@@ -59,8 +59,12 @@
       </dl>
       <h3>最近 7 个自然日</h3>
       <table><thead><tr><th>日期</th><th>贡献次数</th><th>状态</th></tr></thead><tbody id="recent-days"></tbody></table>
-      <p class="explanation">空闲 10 秒时贡献加 1 并预保存到 Interaction；60 秒内继续编辑仍计为同一次，连续空闲 60 秒后结束。保存失败会自动重试；pending 表示当天未结算。</p>
+      <p id="contribution-rule-explanation" class="explanation"></p>
       <p class="note">最近保存检查：<span id="updated-at">—</span></p>
+      <div class="contribution-rule-control">
+        <p id="contribution-rule-label">一次贡献的计时规则</p>
+        <div id="contribution-rules" class="contribution-rules" role="group" aria-labelledby="contribution-rule-label"></div>
+      </div>
     </details>
   </main>
 </body>

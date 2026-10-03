@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createTracker } from '../src/tracker.mjs';
-import { STATE_KEY, dayActivity } from '../src/activity.mjs';
+import { STATE_KEY, advanceActivity, dayActivity } from '../src/activity.mjs';
+import { CONTRIBUTION_IDLE_MINUTES, contributionIdleMs } from '../src/contribution.mjs';
 
 let nextSession = 0;
 const session = date => ({ id: `session-${++nextSession}`, date, lastChangedAt: new Date(date + 'T12:00:00').getTime() });
@@ -32,6 +33,93 @@ test('首次启用保存零贡献，刷新接续已保存累计和基线', async
   assert.equal(result.state.baselineContributions, 0);
   assert.equal(result.savedContributions, 1);
   assert.equal((await reopened.save()).written, false);
+});
+
+test('切换规则保存到 Interaction，重开恢复且重复选择不写入、不改变统计', async () => {
+  const { context, tracker } = fixture();
+  await tracker.confirm(session(context.day));
+  const original = tracker.snapshot().state;
+  for (const minutes of CONTRIBUTION_IDLE_MINUTES) {
+    await tracker.setContributionIdleMinutes(minutes);
+    assert.deepEqual(tracker.snapshot().state, { ...original, contributionIdleMinutes: minutes });
+    const writes = context.writes.length;
+    assert.equal((await tracker.setContributionIdleMinutes(minutes)).written, false);
+    assert.equal(context.writes.length, writes);
+    const reopened = fixture(context.data).tracker;
+    assert.equal((await reopened.load()).state.contributionIdleMinutes, minutes);
+  }
+  const writes = context.writes.length;
+  await assert.rejects(tracker.setContributionIdleMinutes(2), /计时规则无效/);
+  assert.equal(context.writes.length, writes);
+  assert.equal(tracker.snapshot().state.contributionIdleMinutes, 60);
+});
+
+test('计时配置失败保留内存，继续切换后重试只保存最新规则和原贡献', async () => {
+  const { context, tracker } = fixture();
+  await tracker.presave(session(context.day));
+  const original = tracker.snapshot().state;
+  context.fail = true;
+  await assert.rejects(tracker.setContributionIdleMinutes(3), /write failed/);
+  assert.equal(tracker.snapshot().savedContributionIdleMinutes, 1);
+  assert.equal(tracker.snapshot().state.contributionIdleMinutes, 3);
+  await assert.rejects(tracker.setContributionIdleMinutes(30), /write failed/);
+  context.fail = false;
+  await tracker.save();
+  assert.deepEqual(context.data[STATE_KEY], { ...original, contributionIdleMinutes: 30 });
+  assert.equal(tracker.snapshot().savedContributionIdleMinutes, 30);
+});
+
+test('旧配置补默认值且恢复 pending；所有规则按各自边界恢复，损坏配置不覆盖', async () => {
+  const epoch = new Date('2026-10-01T12:00:00').getTime();
+  for (const minutes of CONTRIBUTION_IDLE_MINUTES) {
+    for (const elapsed of [contributionIdleMs(minutes) - 1, contributionIdleMs(minutes)]) {
+      const state = { ...advanceActivity(undefined, '2026-10-01').state,
+        latestContributions: 1, contributionIdleMinutes: minutes,
+        pendingContribution: { id: 'restored', date: '2026-10-01', lastChangedAt: epoch - elapsed } };
+      const { tracker } = fixture({ [STATE_KEY]: state });
+      const result = await tracker.load();
+      assert.equal(Boolean(result.state.pendingContribution), elapsed < contributionIdleMs(minutes));
+      assert.equal(result.state.latestContributions, 1);
+    }
+  }
+  const old = { ...advanceActivity(undefined, '2026-10-01').state, latestContributions: 1,
+    pendingContribution: { id: 'old', date: '2026-10-01', lastChangedAt: epoch - 10000 } };
+  delete old.contributionIdleMinutes;
+  const { tracker, context } = fixture({ [STATE_KEY]: old });
+  await tracker.save();
+  assert.deepEqual(context.data[STATE_KEY], { ...old, contributionIdleMinutes: 1 });
+  const broken = fixture({ [STATE_KEY]: { ...old, contributionIdleMinutes: null } });
+  await assert.rejects(broken.tracker.save(), /计时规则无效/);
+  assert.deepEqual(broken.context.writes, []);
+});
+
+test('慢配置写入前发布内存选择，后续配置与编辑按队列保存最新状态', async () => {
+  let release;
+  let entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  const gate = new Promise(resolve => { release = resolve; });
+  const writes = [];
+  const tracker = createTracker({ readData: async () => ({}), now: () => new Date(2026, 9, 1, 12),
+    writeData: async (key, state) => {
+      writes.push(structuredClone(state));
+      if (writes.length === 1) { entered(); await gate; }
+    },
+  });
+  const first = tracker.setContributionIdleMinutes(3);
+  await started;
+  assert.equal(tracker.snapshot().state.contributionIdleMinutes, 3);
+  assert.equal(tracker.snapshot().savedContributionIdleMinutes, null);
+  const second = tracker.setContributionIdleMinutes(30);
+  const editing = session('2026-10-01');
+  const presaved = tracker.presave(editing);
+  const third = tracker.setContributionIdleMinutes(5);
+  const finished = tracker.confirm(editing);
+  release();
+  await Promise.all([first, second, presaved, third, finished]);
+  assert.deepEqual(writes.map(state => state.contributionIdleMinutes), [3, 30, 30, 5, 5]);
+  assert.equal(writes.at(-1).latestContributions, 1);
+  assert.equal(writes.at(-1).pendingContribution, undefined);
+  assert.equal(tracker.snapshot().savedContributionIdleMinutes, 5);
 });
 
 test('新状态保存替换存储根，不保留其它格式数据', async () => {

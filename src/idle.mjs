@@ -1,7 +1,7 @@
 import { localDate } from './activity.mjs';
+import { DEFAULT_CONTRIBUTION_IDLE_MINUTES, contributionIdleMs } from './contribution.mjs';
 
 export const PRESAVE_IDLE_MS = 10000;
-export const CONTRIBUTION_IDLE_MS = 60000;
 
 export function isDocumentContentChange(event) {
   return Array.isArray(event?.changes)
@@ -9,9 +9,11 @@ export function isDocumentContentChange(event) {
 }
 
 export function createIdleScheduler({ presave, confirm, onActivity = () => {}, restored = null,
+  contributionIdleMinutes = DEFAULT_CONTRIBUTION_IDLE_MINUTES,
   setTimer = setTimeout, clearTimer = clearTimeout, now = Date.now,
   dateNow = () => new Date(), createId = () => globalThis.crypto.randomUUID(), onError = () => {} }) {
   let timer;
+  let idleMs = contributionIdleMs(contributionIdleMinutes);
   let pending = restored ? { ...restored } : null;
   let presaved = Boolean(restored);
   let needsSave = false;
@@ -24,7 +26,7 @@ export function createIdleScheduler({ presave, confirm, onActivity = () => {}, r
   function finishIfIdle() {
     if (disposed || !pending) return false;
     const elapsed = now() - pending.lastChangedAt;
-    if (elapsed >= CONTRIBUTION_IDLE_MS) {
+    if (elapsed >= idleMs) {
       const completed = pending;
       pending = null;
       needsSave = false;
@@ -44,7 +46,7 @@ export function createIdleScheduler({ presave, confirm, onActivity = () => {}, r
 
   function arm() {
     if (!pending || disposed) return;
-    const threshold = needsSave ? PRESAVE_IDLE_MS : CONTRIBUTION_IDLE_MS;
+    const threshold = needsSave ? PRESAVE_IDLE_MS : idleMs;
     timer = setTimer(() => {
       finishIfIdle();
       arm();
@@ -67,6 +69,14 @@ export function createIdleScheduler({ presave, confirm, onActivity = () => {}, r
   return {
     activity,
     finishIfIdle,
+    setContributionIdleMinutes(minutes) {
+      const nextIdleMs = contributionIdleMs(minutes);
+      if (disposed || nextIdleMs === idleMs) return;
+      idleMs = nextIdleMs;
+      clearTimer(timer);
+      finishIfIdle();
+      arm();
+    },
     hasPending: () => pending !== null,
     idleSeconds: () => pending ? Math.max(0, Math.floor((now() - pending.lastChangedAt) / 1000)) : null,
     dispose() { disposed = true; pending = null; clearTimer(timer); },

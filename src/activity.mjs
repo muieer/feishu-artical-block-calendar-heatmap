@@ -1,3 +1,5 @@
+import { DEFAULT_CONTRIBUTION_IDLE_MINUTES, contributionIdleMs } from './contribution.mjs';
+
 export const STATE_KEY = 'contributionHeatmapV1';
 
 export function localDate(now = new Date()) {
@@ -28,8 +30,9 @@ export function validateState(state) {
     || !Number.isSafeInteger(state.latestContributions) || state.latestContributions < state.baselineContributions) {
     throw new Error('保存的贡献次数无效，已保留原数据。');
   }
-  const fields = ['version', 'startedOn', 'currentDate', 'baselineContributions', 'latestContributions', 'history', 'pendingContribution'];
+  const fields = ['version', 'startedOn', 'currentDate', 'baselineContributions', 'latestContributions', 'history', 'pendingContribution', 'contributionIdleMinutes'];
   if (Object.keys(state).some(key => !fields.includes(key))) throw new Error('Interaction 统计结构无效，已保留原数据。');
+  if (Object.hasOwn(state, 'contributionIdleMinutes')) contributionIdleMs(state.contributionIdleMinutes);
   let total = 0;
   for (const [date, delta] of Object.entries(state.history)) {
     if (!isDateKey(date) || date < state.startedOn || date >= state.currentDate
@@ -56,10 +59,11 @@ export function advanceActivity(saved, today) {
   const previous = validateState(saved);
   if (!previous) {
     return { state: { version: 1, startedOn: today, currentDate: today,
-      baselineContributions: 0, latestContributions: 0, history: {} }, notice: '' };
+      baselineContributions: 0, latestContributions: 0, history: {}, contributionIdleMinutes: DEFAULT_CONTRIBUTION_IDLE_MINUTES }, notice: '' };
   }
   if (today < previous.currentDate) throw new Error('本地日期早于当前统计日期，暂停结算；请检查时区或系统日期。');
-  const state = { ...previous, history: { ...previous.history } };
+  const state = { ...previous, history: { ...previous.history },
+    contributionIdleMinutes: previous.contributionIdleMinutes ?? DEFAULT_CONTRIBUTION_IDLE_MINUTES };
   if (today > previous.currentDate) {
     state.history[previous.currentDate] = previous.latestContributions - previous.baselineContributions;
     for (let date = addDays(previous.currentDate, 1); date < today; date = addDays(date, 1)) {

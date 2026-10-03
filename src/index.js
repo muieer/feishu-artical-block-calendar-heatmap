@@ -1,6 +1,7 @@
 import { calendarPage, colorLevel, colorThresholds, dayActivity, addDays, localDate } from './activity.mjs';
 import { createTracker } from './tracker.mjs';
 import { createIdleScheduler } from './idle.mjs';
+import { CONTRIBUTION_IDLE_MINUTES, DEFAULT_CONTRIBUTION_IDLE_MINUTES } from './contribution.mjs';
 import { connectFeishu } from './feishu';
 import './index.css';
 
@@ -22,6 +23,58 @@ let idle;
 let retryTimer;
 let dayCheckInFlight = false;
 let disposed = false;
+let previewReady = false;
+let previewContributionIdleMinutes = DEFAULT_CONTRIBUTION_IDLE_MINUTES;
+let statusMode = 'connecting';
+
+const ruleButtons = CONTRIBUTION_IDLE_MINUTES.map(minutes => {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.textContent = `${minutes} 分钟`;
+  button.dataset.minutes = minutes;
+  button.addEventListener('click', () => {
+    if (button.disabled || disposed) return;
+    if (LOCAL_PREVIEW) {
+      previewContributionIdleMinutes = minutes;
+      render(displayedResult);
+      return;
+    }
+    persist(() => tracker.setContributionIdleMinutes(minutes), false, 'configuration');
+  });
+  document.getElementById('contribution-rules').append(button);
+  return button;
+});
+
+function currentContributionIdleMinutes() {
+  return displayedResult?.state?.contributionIdleMinutes ?? previewContributionIdleMinutes;
+}
+
+function sessionStatus() {
+  const minutes = currentContributionIdleMinutes();
+  if (idle?.hasPending() ?? Boolean(displayedResult?.state?.pendingContribution)) {
+    return displayedResult?.state?.pendingContribution
+      ? `本次贡献已预保存；继续编辑仍计为同一次，连续空闲 ${minutes} 分钟后结束。`
+      : `检测到文档变化，空闲 10 秒后预保存，连续空闲 ${minutes} 分钟后结束本次编辑。`;
+  }
+  return '正在监听文档变化。';
+}
+
+function renderStatus() {
+  if (status.classList.contains('error') || statusMode === 'connecting') return;
+  const minutes = currentContributionIdleMinutes();
+  if (statusMode === 'preview') {
+    status.textContent = `本地外观预览，当前计时规则为 ${minutes} 分钟，仅在本页面生效，未写入飞书数据。文档变化和贡献存储需在飞书宿主中验证。`;
+  } else if (statusMode === 'configuration-saving') {
+    status.textContent = `正在保存计时规则到 Interaction，当前规则为 ${minutes} 分钟。`;
+  } else if (statusMode === 'configuration-saved') {
+    status.textContent = `计时规则已保存到 Interaction，当前规则为 ${minutes} 分钟。${sessionStatus()}`;
+  } else if (statusMode === 'contribution-saving') {
+    status.textContent = '正在保存贡献次数到 Interaction…';
+  } else {
+    status.textContent = statusMode === 'contribution-saved'
+      ? `贡献次数已保存到 Interaction。${sessionStatus()}` : sessionStatus();
+  }
+}
 
 function describe(day) {
   if (day.status === 'pending') return `${day.delta} · pending（未结算）`;
@@ -64,6 +117,14 @@ function renderMonths(dates) {
 function render(result = { state: null, today: localDate(), savedContributions: null }) {
   displayedResult = result;
   const { state, today } = result;
+  const minutes = currentContributionIdleMinutes();
+  for (const button of ruleButtons) {
+    const selected = Number(button.dataset.minutes) === minutes;
+    button.disabled = disposed || !(result.loaded || previewReady) || selected;
+    button.setAttribute('aria-pressed', String(selected));
+  }
+  document.getElementById('contribution-rule-explanation').textContent = `空闲 10 秒时贡献加 1 并预保存到 Interaction；${minutes} 分钟内继续编辑仍计为同一次，连续空闲 ${minutes} 分钟后结束。保存失败会自动重试；pending 表示当天未结算。`;
+  renderStatus();
   const { dates, pageIndex, pageCount } = calendarPage(state?.startedOn ?? today, today, selectedPage);
   selectedPage = pageIndex;
   const thresholds = colorThresholds(state?.history || {});
@@ -130,15 +191,17 @@ function scheduleRetry() {
   if (disposed || retryTimer) return;
   retryTimer = setTimeout(() => {
     retryTimer = undefined;
-    persist(() => tracker.save());
+    const snapshot = tracker.snapshot();
+    const kind = snapshot.state.contributionIdleMinutes !== snapshot.savedContributionIdleMinutes ? 'configuration' : 'contribution';
+    persist(() => tracker.save(), false, kind);
   }, SAVE_RETRY_MS);
 }
 
-async function persist(operation, quiet = false) {
+async function persist(operation, quiet = false, kind = 'contribution') {
   if (disposed) return;
   if (!quiet) {
-    status.textContent = '正在保存贡献次数到 Interaction…';
-    status.classList.remove('error');
+    statusMode = `${kind}-saving`;
+    renderStatus();
   }
   try {
     const result = await operation();
@@ -147,9 +210,8 @@ async function persist(operation, quiet = false) {
     clearTimeout(retryTimer);
     retryTimer = undefined;
     status.classList.remove('error');
-    status.textContent = result.state?.pendingContribution
-      ? '本次贡献已预保存；继续编辑仍计为同一次，连续空闲 60 秒后结束。'
-      : result.written ? '贡献次数已保存到 Interaction，本次编辑已结束。' : '正在监听文档变化。';
+    statusMode = kind === 'configuration' ? 'configuration-saved' : result.written ? 'contribution-saved' : 'idle';
+    renderStatus();
     document.getElementById('updated-at').textContent = new Date().toLocaleTimeString();
   } catch (error) {
     showError(error);
@@ -178,6 +240,7 @@ async function start() {
   function cleanup() {
     if (disposed) return;
     disposed = true;
+    for (const button of ruleButtons) button.disabled = true;
     idle?.dispose();
     clearTimeout(retryTimer);
     clearTimeout(heightTimer);
@@ -202,19 +265,27 @@ async function start() {
   });
   observer.observe(card);
   if (LOCAL_PREVIEW) {
-    status.textContent = '本地外观预览，无飞书数据。文档变化和贡献存储需在飞书宿主中验证。';
+    previewReady = true;
+    statusMode = 'preview';
+    render(displayedResult);
     return;
   }
   try {
     host = await connectFeishu();
     if (disposed) { host.destroy(); return; }
     tracker = createTracker({ ...host, onChange: result => {
-      if (!disposed) { render(result); host.resize().catch(() => {}); }
+      if (!disposed) {
+        idle?.setContributionIdleMinutes(result.state.contributionIdleMinutes);
+        idleSeconds.textContent = idle?.idleSeconds() ?? '—';
+        render(result);
+        host.resize().catch(() => {});
+      }
     } });
     await tracker.load();
     if (disposed) return;
     idle = createIdleScheduler({
       restored: tracker.snapshot().state?.pendingContribution,
+      contributionIdleMinutes: tracker.snapshot().state.contributionIdleMinutes,
       presave: session => persist(() => tracker.presave(session)),
       confirm: session => persist(() => tracker.confirm(session)),
       onActivity: session => persist(() => tracker.touch(session), true),
@@ -223,7 +294,8 @@ async function start() {
     stopListening = await host.listen(event => {
       if (!idle.activity(event)) return;
       idleSeconds.textContent = '0';
-      if (!status.classList.contains('error')) status.textContent = '检测到文档变化，空闲 10 秒后预保存，连续空闲 60 秒后结束本次编辑。';
+      statusMode = 'editing';
+      renderStatus();
     });
     if (disposed) { await stopListening(); return; }
     idleTimer = setInterval(() => { idleSeconds.textContent = idle.idleSeconds() ?? '—'; }, 1000);

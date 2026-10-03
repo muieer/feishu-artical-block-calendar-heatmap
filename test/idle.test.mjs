@@ -3,9 +3,10 @@ import assert from 'node:assert/strict';
 import { createIdleScheduler } from '../src/idle.mjs';
 import { createTracker } from '../src/tracker.mjs';
 import { STATE_KEY } from '../src/activity.mjs';
+import { CONTRIBUTION_IDLE_MINUTES, contributionIdleMs } from '../src/contribution.mjs';
 
 const change = { changes: [{ type: 'update', blockId: 1 }] };
-function fixture(callbacks = {}) {
+function fixture(callbacks = {}, options = {}) {
   let clock = 0;
   let nextId = 0;
   const timers = new Map();
@@ -14,6 +15,7 @@ function fixture(callbacks = {}) {
   const epoch = new Date(2026, 9, 1, 12).getTime();
   function create(restored) {
     return createIdleScheduler({
+      ...options,
       now: () => epoch + clock, dateNow: () => new Date(epoch + clock), restored,
       createId: () => `session-${++nextId}`,
       ...Object.fromEntries(['presave', 'confirm', 'onActivity'].map(type => [type, session => {
@@ -47,6 +49,92 @@ test('无编辑和无效事件即使等待一分钟也不计贡献', async () =>
   await f.advance(60000);
   assert.deepEqual(f.calls, []);
   assert.equal(f.scheduler.idleSeconds(), null);
+});
+
+for (const minutes of CONTRIBUTION_IDLE_MINUTES) {
+  test(`${minutes} 分钟规则：10 秒预保存、继续编辑合并、到达边界结束`, async () => {
+    const f = fixture({}, { contributionIdleMinutes: minutes });
+    f.scheduler.activity(change);
+    await f.advance(10000);
+    assert.equal(f.saves().length, 1);
+    await f.advance(20000);
+    f.scheduler.activity(change);
+    await f.advance(10000);
+    assert.equal(f.saves().length, 2);
+    await f.advance(contributionIdleMs(minutes) - 10001);
+    assert.equal(f.finishes().length, 0);
+    await f.advance(1);
+    assert.equal(f.finishes().length, 1);
+    assert.equal(new Set(f.calls.map(call => call.session.id)).size, 1);
+    assert.equal(f.scheduler.hasPending(), false);
+  });
+}
+
+test('延长计时规则不重置最后编辑时间，旧定时器不提前结束', async () => {
+  const f = fixture();
+  f.scheduler.activity(change);
+  await f.advance(30000);
+  f.scheduler.setContributionIdleMinutes(3);
+  assert.equal(f.scheduler.idleSeconds(), 30);
+  await f.advance(30000);
+  assert.equal(f.finishes().length, 0);
+  await f.advance(119999);
+  assert.equal(f.finishes().length, 0);
+  await f.advance(1);
+  assert.equal(f.finishes()[0].clock, 180000);
+});
+
+test('缩短规则立即重算边界，尚未超时与已经超时都只确认一次', async () => {
+  for (const elapsed of [30000, 120000]) {
+    const f = fixture({}, { contributionIdleMinutes: 3 });
+    f.scheduler.activity(change);
+    await f.advance(elapsed);
+    f.scheduler.setContributionIdleMinutes(1);
+    await f.advance(0);
+    assert.equal(f.finishes().length, elapsed >= 60000 ? 1 : 0);
+    if (elapsed < 60000) {
+      await f.advance(29999);
+      assert.equal(f.finishes().length, 0);
+      await f.advance(1);
+    }
+    assert.equal(f.finishes().length, 1);
+    assert.equal(f.saves().length, 1);
+    f.scheduler.setContributionIdleMinutes(60);
+    await f.advance(3600000);
+    assert.equal(f.finishes().length, 1);
+    assert.equal(f.scheduler.hasPending(), false);
+  }
+});
+
+test('预保存前切换规则仍在最后编辑后 10 秒预保存，无编辑切换不计数', async () => {
+  const f = fixture();
+  f.scheduler.setContributionIdleMinutes(60);
+  await f.advance(3600000);
+  assert.equal(f.calls.length, 0);
+  f.scheduler.activity(change);
+  await f.advance(5000);
+  f.scheduler.setContributionIdleMinutes(3);
+  await f.advance(4999);
+  assert.equal(f.saves().length, 0);
+  await f.advance(1);
+  assert.equal(f.saves().length, 1);
+  assert.throws(() => f.scheduler.setContributionIdleMinutes(2), /计时规则无效/);
+});
+
+test('非默认规则的后台延迟边界和恢复按配置处理', async () => {
+  for (const gap of [179999, 180000]) {
+    const f = fixture({}, { contributionIdleMinutes: 3 });
+    f.scheduler.activity(change);
+    await f.advance(10000);
+    const restored = f.saves()[0].session;
+    f.scheduler.dispose();
+    await f.advance(gap - 10000, false);
+    const resumed = f.create(restored);
+    resumed.activity(change);
+    await f.advance(10000);
+    assert.equal(f.finishes().length, gap === 180000 ? 1 : 0);
+    assert.equal(new Set(f.calls.map(call => call.session.id)).size, gap === 180000 ? 2 : 1);
+  }
 });
 
 test('10 秒预保存，60 秒结束；两个边界前均不提前执行', async () => {

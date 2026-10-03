@@ -6,10 +6,27 @@ const first = (date = '2026-10-01') => advanceActivity(undefined, date).state;
 
 test('首次启用从零开始，启用前无数据，当天 pending', () => {
   const state = first();
+  assert.equal(state.contributionIdleMinutes, 1);
   assert.equal(state.latestContributions, 0);
   assert.equal(state.baselineContributions, 0);
   assert.deepEqual(dayActivity(state, '2026-09-30', '2026-10-01'), { status: 'no-data', delta: null });
   assert.deepEqual(dayActivity(state, '2026-10-01', '2026-10-01'), { status: 'pending', delta: 0 });
+});
+
+test('缺少计时字段的历史按 1 分钟读取，非默认规则跨日保留，无效值拒绝', () => {
+  const old = recordContribution(first(), '2026-10-01');
+  delete old.contributionIdleMinutes;
+  const upgraded = advanceActivity(old, '2026-10-02').state;
+  assert.equal(upgraded.contributionIdleMinutes, 1);
+  assert.equal(upgraded.latestContributions, 1);
+  assert.equal(upgraded.baselineContributions, 1);
+  assert.deepEqual(upgraded.history, { '2026-10-01': 1 });
+  assert.equal(Object.hasOwn(old, 'contributionIdleMinutes'), false);
+  const configured = advanceActivity({ ...upgraded, contributionIdleMinutes: 30 }, '2026-10-03').state;
+  assert.equal(configured.contributionIdleMinutes, 30);
+  for (const value of [undefined, null, '3', 0, 2, 1.5, 61, NaN, Infinity]) {
+    assert.throws(() => validateState({ ...old, contributionIdleMinutes: value }), /计时规则无效/);
+  }
 });
 
 test('每次确认加一，同日加载不重置基线或累计值', () => {
