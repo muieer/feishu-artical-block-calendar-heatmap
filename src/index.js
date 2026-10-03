@@ -17,6 +17,7 @@ const newerPage = document.getElementById('newer-page');
 const SAVE_RETRY_MS = 10000;
 let selectedPage = 0;
 let displayedResult;
+let renderedChart;
 let host;
 let tracker;
 let idle;
@@ -114,8 +115,7 @@ function renderMonths(dates) {
   });
 }
 
-function render(result = { state: null, today: localDate(), savedContributions: null }) {
-  displayedResult = result;
+function renderControls(result) {
   const { state, today } = result;
   const minutes = currentContributionIdleMinutes();
   for (const button of ruleButtons) {
@@ -125,9 +125,30 @@ function render(result = { state: null, today: localDate(), savedContributions: 
   }
   document.getElementById('contribution-rule-explanation').textContent = `空闲 10 秒时贡献加 1 并预保存到 Interaction；${minutes} 分钟内继续编辑仍计为同一次，连续空闲 ${minutes} 分钟后结束。保存失败会自动重试；pending 表示当天未结算。`;
   renderStatus();
+  document.getElementById('latest-contributions').textContent = state?.latestContributions ?? '—';
+  document.getElementById('saved-contributions').textContent = result.savedContributions ?? '—';
+  document.getElementById('baseline-contributions').textContent = state?.baselineContributions ?? '—';
+  document.getElementById('live-delta').textContent = state?.currentDate === today ? state.latestContributions - state.baselineContributions : '—';
+  document.getElementById('current-date').textContent = state?.currentDate ?? '尚未开始';
+  document.getElementById('timezone').textContent = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  document.getElementById('started-on').textContent = state?.startedOn ?? '—';
+}
+
+function renderChart({ state, today }) {
+  const hasState = Boolean(state);
+  const startedOn = state?.startedOn ?? today;
+  const delta = state?.currentDate === today ? state.latestContributions - state.baselineContributions : null;
+  const history = state?.history ?? {};
+  // Snapshots are cloned; compare display values, never session metadata or object identity.
+  if (renderedChart && renderedChart.hasState === hasState && renderedChart.startedOn === startedOn
+    && renderedChart.today === today && renderedChart.pageIndex === selectedPage && renderedChart.delta === delta) {
+    const dates = Object.keys(history);
+    if (dates.length === Object.keys(renderedChart.history).length
+      && dates.every(date => Object.hasOwn(renderedChart.history, date) && renderedChart.history[date] === history[date])) return;
+  }
   const { dates, pageIndex, pageCount } = calendarPage(state?.startedOn ?? today, today, selectedPage);
   selectedPage = pageIndex;
-  const thresholds = colorThresholds(state?.history || {});
+  const thresholds = colorThresholds(history);
   grid.replaceChildren();
   renderMonths(dates);
   dates.forEach(date => {
@@ -148,13 +169,6 @@ function render(result = { state: null, today: localDate(), savedContributions: 
   document.getElementById('page-number').textContent = `${pageIndex + 1} / ${pageCount}`;
   olderPage.disabled = pageIndex === pageCount - 1;
   newerPage.disabled = pageIndex === 0;
-  document.getElementById('latest-contributions').textContent = state?.latestContributions ?? '—';
-  document.getElementById('saved-contributions').textContent = result.savedContributions ?? '—';
-  document.getElementById('baseline-contributions').textContent = state?.baselineContributions ?? '—';
-  document.getElementById('live-delta').textContent = state?.currentDate === today ? state.latestContributions - state.baselineContributions : '—';
-  document.getElementById('current-date').textContent = state?.currentDate ?? '尚未开始';
-  document.getElementById('timezone').textContent = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  document.getElementById('started-on').textContent = state?.startedOn ?? '—';
   recent.replaceChildren();
   for (let offset = -6; offset <= 0; offset += 1) {
     const date = addDays(today, offset);
@@ -168,6 +182,13 @@ function render(result = { state: null, today: localDate(), savedContributions: 
     recent.append(row);
   }
   updateChartLayout();
+  renderedChart = { hasState, startedOn, today, pageIndex, delta, history: { ...history } };
+}
+
+function render(result = { state: null, today: localDate(), savedContributions: null }) {
+  displayedResult = result;
+  renderControls(result);
+  renderChart(result);
 }
 
 function changePage(offset) {

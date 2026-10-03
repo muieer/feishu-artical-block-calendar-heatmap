@@ -19,11 +19,11 @@ async function uiFixture({ startedOn = '2026-10-03', savedData, readGate, failRe
     const handlers = new Map();
     const attributes = new Map();
     let text = '';
-    return { children: [], dataset: {}, style: { setProperty() {}, getPropertyValue() { return ''; } }, clientWidth: 768, scrollWidth: 0, scrollLeft: 0,
+    return { children: [], rebuilds: 0, dataset: {}, style: { setProperty() {}, getPropertyValue() { return ''; } }, clientWidth: 768, scrollWidth: 0, scrollLeft: 0,
       addEventListener: (name, handler) => handlers.set(name, handler),
       click() { if (!this.disabled) handlers.get('click')?.(); },
       get textContent() { return text; }, set textContent(value) { text = String(value); },
-      replaceChildren() { this.children = []; }, append(child) { this.children.push(child); },
+      replaceChildren() { this.rebuilds += 1; this.children = []; }, append(child) { this.children.push(child); },
       setAttribute: (name, value) => attributes.set(name, value), getAttribute: name => attributes.get(name),
       classList: { add: value => classes.add(value), remove: value => classes.delete(value), contains: value => classes.has(value) } };
   }
@@ -36,9 +36,10 @@ async function uiFixture({ startedOn = '2026-10-03', savedData, readGate, failRe
   const setTimer = (fn, delay) => { const id = ++nextId; timers.set(id, { fn, at: clock + delay }); return id; };
   const clearTimer = id => timers.delete(id);
   const windowEvents = new Map();
+  const documentEvents = new Map();
   let data = savedData ?? (startedOn === today ? { obsoleteStatistics: { count: 100 } }
     : { [activity.STATE_KEY]: activity.advanceActivity(undefined, startedOn).state });
-  const context = { failWrite: false, writes: 0 };
+  const context = { failWrite: false, writes: 0, calendarCalls: 0, thresholdCalls: 0 };
   let changeHandler;
   const storage = createInteractionStorage({ Interaction: {
     getData: async () => {
@@ -59,12 +60,19 @@ async function uiFixture({ startedOn = '2026-10-03', savedData, readGate, failRe
   const source = (await fs.readFile(new URL('../src/index.js', import.meta.url), 'utf8')).replace(/^import .*;\n/gm, '');
   vm.runInNewContext(source, {
     ...activity, ...contribution, localDate: () => activity.localDate(dateNow()),
-    createTracker: options => createTracker({ ...options, now: dateNow }),
+    calendarPage: (...args) => { context.calendarCalls += 1; return activity.calendarPage(...args); },
+    colorThresholds: (...args) => { context.thresholdCalls += 1; return activity.colorThresholds(...args); },
+    createTracker: options => {
+      context.publish = options.onChange;
+      context.tracker = createTracker({ ...options, now: dateNow });
+      return context.tracker;
+    },
     createIdleScheduler: options => createIdleScheduler({ ...options, now: () => dateNow().getTime(), dateNow, setTimer, clearTimer, createId: () => `ui-session-${++nextId}` }),
     connectFeishu: async () => host, LOCAL_PREVIEW: preview,
-    document: { getElementById, createElement: element, querySelector: selector => getElementById(selector), addEventListener() {}, removeEventListener() {} },
+    document: { getElementById, createElement: element, querySelector: selector => getElementById(selector),
+      addEventListener: (name, handler) => documentEvents.set(name, handler), removeEventListener: name => documentEvents.delete(name) },
     window: { addEventListener: (name, handler) => windowEvents.set(name, handler) },
-    ResizeObserver: class { observe() {} disconnect() {} },
+    ResizeObserver: class { constructor(callback) { context.resize = callback; } observe() {} disconnect() {} },
     requestAnimationFrame: fn => setTimer(fn, 16), cancelAnimationFrame: clearTimer,
     setTimeout: setTimer, clearTimeout: clearTimer, setInterval: () => ++nextId, clearInterval() {},
   }, { filename: 'src/index.js' });
@@ -84,8 +92,38 @@ async function uiFixture({ startedOn = '2026-10-03', savedData, readGate, failRe
   }
   return { today, context, getElementById, flush, advance, data: () => data,
     edit: () => changeHandler({ changes: [{ type: 'update', blockId: 1 }] }),
+    visible: () => documentEvents.get('visibilitychange')?.(),
     rule: minutes => getElementById('contribution-rules').children.find(button => Number(button.dataset.minutes) === minutes),
     close: async () => { windowEvents.get('pagehide')(); await flush(); } };
+}
+
+function chartSnapshot(f) {
+  return { calendarCalls: f.context.calendarCalls, thresholdCalls: f.context.thresholdCalls,
+    regions: ['heatmap', 'months', 'recent-days'].map(id => {
+      const element = f.getElementById(id);
+      return { id, rebuilds: element.rebuilds, nodes: [...element.children] };
+    }) };
+}
+
+function assertChartUnchanged(f, before) {
+  assert.equal(f.context.calendarCalls, before.calendarCalls, 'unchanged display skips calendar generation');
+  assert.equal(f.context.thresholdCalls, before.thresholdCalls, 'unchanged display skips threshold calculation');
+  for (const { id, rebuilds, nodes } of before.regions) {
+    const element = f.getElementById(id);
+    assert.equal(element.rebuilds, rebuilds, `${id} is not rebuilt`);
+    assert.equal(element.children.length, nodes.length);
+    nodes.forEach((node, index) => assert.equal(element.children[index], node, `${id} retains node ${index}`));
+  }
+}
+
+function assertChartRebuiltOnce(f, before) {
+  assert.equal(f.context.calendarCalls, before.calendarCalls + 1);
+  assert.equal(f.context.thresholdCalls, before.thresholdCalls + 1);
+  for (const { id, rebuilds, nodes } of before.regions) {
+    const element = f.getElementById(id);
+    assert.equal(element.rebuilds, rebuilds + 1, `${id} is rebuilt once`);
+    assert.notEqual(element.children[0], nodes[0]);
+  }
 }
 
 for (const startedOn of ['2026-10-03', '2026-09-01', '2025-09-27', '2024-09-21']) {
@@ -282,5 +320,259 @@ test('缩短规则在慢网络保存完成前结束当前计时，确认接续�
   assert.equal(f.data()[activity.STATE_KEY].contributionIdleMinutes, 1);
   assert.equal(f.data()[activity.STATE_KEY].pendingContribution, undefined);
   assert.equal(f.data()[activity.STATE_KEY].latestContributions, 1);
+  await f.close();
+});
+
+test('首次加载与贡献变化各更新一次，慢保存成功仅更新保存指标', async () => {
+  let releaseRead;
+  let releaseWrite;
+  const readGate = new Promise(resolve => { releaseRead = resolve; });
+  const writeGate = new Promise(resolve => { releaseWrite = resolve; });
+  const f = await uiFixture({ readGate, writeGate: async (_, count) => { if (count === 2) await writeGate; } });
+  await f.flush();
+  assert.equal(f.getElementById('heatmap').rebuilds, 1);
+  const loading = chartSnapshot(f);
+  releaseRead();
+  await f.flush();
+  assertChartRebuiltOnce(f, loading);
+  assert.equal(f.getElementById('heatmap').children.length, 371);
+  const loaded = chartSnapshot(f);
+  f.edit();
+  await f.advance(9999);
+  assertChartUnchanged(f, loaded);
+  await f.advance(1);
+  assertChartRebuiltOnce(f, loaded);
+  assert.equal(f.getElementById('latest-contributions').textContent, '1');
+  assert.equal(f.getElementById('saved-contributions').textContent, '0');
+  const presaved = chartSnapshot(f);
+  releaseWrite();
+  await f.flush();
+  assertChartUnchanged(f, presaved);
+  assert.equal(f.getElementById('saved-contributions').textContent, '1');
+  assert.match(f.getElementById('status').textContent, /已保存.*预保存/);
+  await f.close();
+});
+
+test('预保存后的连续编辑、重复预保存与最终确认保留节点，编辑时间仍写入', async () => {
+  const f = await uiFixture();
+  await f.flush();
+  f.edit();
+  await f.advance(10000);
+  const before = chartSnapshot(f);
+  const original = f.data()[activity.STATE_KEY].pendingContribution;
+  const writes = f.context.writes;
+  for (let i = 0; i < 20; i += 1) {
+    await f.advance(200);
+    f.edit();
+    await f.flush();
+    assertChartUnchanged(f, before);
+    assert.equal(f.getElementById('idle-seconds').textContent, '0');
+    assert.match(f.getElementById('status').textContent, /预保存/);
+  }
+  const latest = f.data()[activity.STATE_KEY].pendingContribution;
+  assert.equal(latest.id, original.id);
+  assert.equal(latest.lastChangedAt, original.lastChangedAt + 14000);
+  assert.equal(f.context.writes, writes + 20);
+  await f.advance(10000);
+  assertChartUnchanged(f, before);
+  await f.advance(50000);
+  assertChartUnchanged(f, before);
+  assert.equal(f.data()[activity.STATE_KEY].pendingContribution, undefined);
+  assert.equal(f.data()[activity.STATE_KEY].latestContributions, 1);
+  assert.equal(f.getElementById('idle-seconds').textContent, '—');
+  assert.match(f.getElementById('status').textContent, /正在监听/);
+  f.edit();
+  await f.advance(10000);
+  assertChartRebuiltOnce(f, before);
+  assert.equal(f.getElementById('live-delta').textContent, '2');
+  await f.close();
+});
+
+test('贡献保存失败与重试不重复重建，指标和错误状态照常更新', async () => {
+  const f = await uiFixture();
+  await f.flush();
+  const initial = chartSnapshot(f);
+  f.context.failWrite = true;
+  f.edit();
+  await f.advance(10000);
+  assertChartRebuiltOnce(f, initial);
+  const failed = chartSnapshot(f);
+  assert.equal(f.getElementById('saved-contributions').textContent, '0');
+  assert.equal(f.getElementById('status').classList.contains('error'), true);
+  await f.advance(10000);
+  assertChartUnchanged(f, failed);
+  f.context.failWrite = false;
+  await f.advance(10000);
+  assertChartUnchanged(f, failed);
+  assert.equal(f.getElementById('saved-contributions').textContent, '1');
+  assert.equal(f.getElementById('status').classList.contains('error'), false);
+  await f.close();
+});
+
+test('配置切换、失败重试和本地预览不重建，缩短规则确认原贡献也不重建', async () => {
+  const f = await uiFixture();
+  await f.flush();
+  f.edit();
+  await f.advance(10000);
+  const before = chartSnapshot(f);
+  f.rule(3).click();
+  await f.flush();
+  assertChartUnchanged(f, before);
+  assert.equal(f.rule(3).disabled, true);
+  f.context.failWrite = true;
+  f.rule(30).click();
+  await f.flush();
+  assertChartUnchanged(f, before);
+  assert.equal(f.rule(30).getAttribute('aria-pressed'), 'true');
+  assert.match(f.getElementById('contribution-rule-explanation').textContent, /30 分钟/);
+  assert.equal(f.getElementById('status').textContent, 'storage unavailable');
+  f.context.failWrite = false;
+  await f.advance(10000);
+  assertChartUnchanged(f, before);
+  assert.equal(f.data()[activity.STATE_KEY].contributionIdleMinutes, 30);
+  assert.match(f.getElementById('status').textContent, /计时规则已保存.*30 分钟/);
+  await f.advance(50000);
+  f.rule(1).click();
+  await f.flush();
+  assertChartUnchanged(f, before);
+  assert.equal(f.data()[activity.STATE_KEY].pendingContribution, undefined);
+  assert.equal(f.getElementById('idle-seconds').textContent, '—');
+  const preview = await uiFixture({ preview: true });
+  await preview.flush();
+  assert.equal(preview.getElementById('heatmap').rebuilds, 1);
+  const previewBefore = chartSnapshot(preview);
+  preview.rule(60).click();
+  assertChartUnchanged(preview, previewBefore);
+  assert.equal(preview.rule(60).disabled, true);
+  assert.match(preview.getElementById('status').textContent, /60 分钟.*未写入飞书数据/);
+  await f.close();
+  await preview.close();
+});
+
+test('跨日结算只更新一次，重复日期检查与保存保持节点', async () => {
+  const f = await uiFixture({ startedOn: '2025-09-27' });
+  await f.flush();
+  f.edit();
+  await f.advance(60000);
+  const before = chartSnapshot(f);
+  await f.advance(86400000);
+  f.visible();
+  await f.flush();
+  assertChartRebuiltOnce(f, before);
+  const nextDay = '2026-10-04';
+  const cells = f.getElementById('heatmap').children;
+  assert.equal(cells.find(cell => cell.dataset.date === f.today).className, 'cell level-1 settled');
+  assert.equal(cells.find(cell => cell.dataset.date === nextDay).className, 'cell level-0 pending');
+  assert.equal(f.getElementById('date-range').textContent, `${nextDay} · 本地日期`);
+  assert.equal(f.getElementById('baseline-contributions').textContent, '1');
+  assert.equal(f.getElementById('live-delta').textContent, '0');
+  const rows = f.getElementById('recent-days').children;
+  assert.equal(rows.at(-2).children[2].textContent, '已结算');
+  assert.equal(rows.at(-1).children[0].textContent, nextDay);
+  assert.equal(rows.at(-1).children[1].textContent, '0');
+  const settled = chartSnapshot(f);
+  f.visible();
+  await f.context.tracker.rollover();
+  await f.flush();
+  assertChartUnchanged(f, settled);
+  await f.close();
+});
+
+test('历史按内容比较，键顺序不影响渲染，零记录与缺失记录区分，页外历史影响颜色', async () => {
+  const f = await uiFixture({ startedOn: '2024-09-21' });
+  await f.flush();
+  f.edit();
+  await f.advance(60000);
+  f.edit();
+  await f.advance(60000);
+  const before = chartSnapshot(f);
+  const snapshot = f.context.tracker.snapshot();
+  snapshot.state.history = Object.fromEntries(Object.entries(snapshot.state.history).reverse());
+  f.context.publish(structuredClone(snapshot));
+  assertChartUnchanged(f, before);
+  const offPage = snapshot.state.startedOn;
+  assert.ok(!f.getElementById('heatmap').children.some(cell => cell.dataset.date === offPage));
+  snapshot.state.history[offPage] = 1;
+  snapshot.state.baselineContributions = 1;
+  snapshot.state.latestContributions = 3;
+  activity.validateState(snapshot.state);
+  f.context.publish(structuredClone(snapshot));
+  assertChartRebuiltOnce(f, before);
+  const withHistory = chartSnapshot(f);
+  assert.equal(f.getElementById('heatmap').children.find(cell => cell.dataset.date === f.today).className, 'cell level-4 pending');
+  snapshot.state.history[offPage] = 0;
+  snapshot.state.baselineContributions = 0;
+  snapshot.state.latestContributions = 2;
+  f.context.publish(structuredClone(snapshot));
+  assertChartRebuiltOnce(f, withHistory);
+  assert.equal(f.getElementById('heatmap').children.find(cell => cell.dataset.date === f.today).className, 'cell level-1 pending');
+  const zeroHistory = chartSnapshot(f);
+  const zeroDate = activity.addDays(f.today, -1);
+  assert.equal(f.getElementById('heatmap').children.find(cell => cell.dataset.date === zeroDate).dataset.status, 'settled');
+  delete snapshot.state.history[zeroDate];
+  f.context.publish(structuredClone(snapshot));
+  assertChartRebuiltOnce(f, zeroHistory);
+  assert.equal(f.getElementById('heatmap').children.find(cell => cell.dataset.date === zeroDate).dataset.status, 'no-data');
+  const missingHistory = chartSnapshot(f);
+  snapshot.state.history[zeroDate] = 0;
+  f.context.publish(structuredClone(snapshot));
+  assertChartRebuiltOnce(f, missingHistory);
+  const restoredHistory = chartSnapshot(f);
+  f.context.publish(structuredClone(snapshot));
+  assertChartUnchanged(f, restoredHistory);
+  await f.close();
+});
+
+test('切页重建一次，历史页贡献更新保留页码，返回最新页展示新贡献', async () => {
+  const f = await uiFixture({ startedOn: '2024-09-21' });
+  await f.flush();
+  const latest = chartSnapshot(f);
+  f.getElementById('.chart-scroll').scrollLeft = 100;
+  f.getElementById('older-page').click();
+  assertChartRebuiltOnce(f, latest);
+  assert.equal(f.getElementById('.chart-scroll').scrollLeft, 0);
+  const historical = chartSnapshot(f);
+  const dates = f.getElementById('heatmap').children.map(cell => cell.dataset.date);
+  const pageNumber = f.getElementById('page-number').textContent;
+  f.edit();
+  await f.advance(10000);
+  assertChartRebuiltOnce(f, historical);
+  assert.equal(f.getElementById('page-number').textContent, pageNumber);
+  assert.deepEqual(f.getElementById('heatmap').children.map(cell => cell.dataset.date), dates);
+  const contributed = chartSnapshot(f);
+  await f.advance(200);
+  f.edit();
+  await f.flush();
+  assertChartUnchanged(f, contributed);
+  f.getElementById('newer-page').click();
+  assertChartRebuiltOnce(f, contributed);
+  assert.equal(f.getElementById('heatmap').children.find(cell => cell.dataset.date === f.today).className, 'cell level-1 pending');
+  await f.close();
+});
+
+test('宽度变化继续调整布局与月份可见性，保留日期和月份节点', async () => {
+  const f = await uiFixture();
+  await f.flush();
+  const before = chartSnapshot(f);
+  const card = f.getElementById('.heatmap-card');
+  let cellSize;
+  card.style.setProperty = (_, value) => { cellSize = value; };
+  card.style.getPropertyValue = () => cellSize;
+  f.getElementById('.chart-scroll').clientWidth = 300;
+  const label = f.getElementById('months').children[0];
+  label.scrollWidth = 100;
+  label.clientWidth = 50;
+  f.context.resize();
+  await f.advance(16);
+  assertChartUnchanged(f, before);
+  assert.equal(cellSize, '10px');
+  assert.equal(label.style.visibility, 'hidden');
+  f.getElementById('.chart-scroll').clientWidth = 1000;
+  label.clientWidth = 150;
+  f.context.resize();
+  await f.advance(16);
+  assertChartUnchanged(f, before);
+  assert.ok(parseFloat(cellSize) > 10);
+  assert.equal(label.style.visibility, 'visible');
   await f.close();
 });
