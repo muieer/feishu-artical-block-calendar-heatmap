@@ -13,6 +13,14 @@
       <h1>日历热力图</h1>
       <span id="date-range" class="note"></span>
     </div>
+    <div class="chart-toolbar">
+      <span id="visible-range" class="note"></span>
+      <nav id="pagination" class="pagination" aria-label="热力图历史分页" hidden>
+        <button id="older-page" type="button" aria-controls="heatmap">更早</button>
+        <span id="page-number" class="note" aria-live="polite" aria-atomic="true"></span>
+        <button id="newer-page" type="button" aria-controls="heatmap">更新</button>
+      </nav>
+    </div>
     <div class="chart-scroll">
       <div class="chart">
         <div id="months" class="months" aria-hidden="true"></div>
@@ -35,7 +43,7 @@
       <span class="cell level-4" aria-hidden="true"></span>
       <span>多</span>
     </div>
-    <p class="explanation">每格一个自然日。颜色表示贡献次数，今天随贡献次数更新颜色；蓝色轮廓表示当天未结算。最后一次文档变化后空闲 10 秒预保存一次贡献，连续空闲 60 秒后结束本次编辑。</p>
+    <p class="explanation">每格代表一天，颜色表示贡献次数；蓝色轮廓表示今天尚未结算。</p>
     <details class="debug" aria-labelledby="debug-title">
       <summary id="debug-title">开发验证</summary>
       <p>闲置 <span id="idle-seconds">—</span> 秒</p>

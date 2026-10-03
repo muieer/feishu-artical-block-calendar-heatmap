@@ -1,4 +1,4 @@
-import { calendarDates, colorLevel, colorThresholds, dayActivity, addDays, localDate } from './activity.mjs';
+import { calendarPage, colorLevel, colorThresholds, dayActivity, addDays, localDate } from './activity.mjs';
 import { createTracker } from './tracker.mjs';
 import { createIdleScheduler } from './idle.mjs';
 import { connectFeishu } from './feishu';
@@ -9,7 +9,13 @@ const months = document.getElementById('months');
 const status = document.getElementById('status');
 const recent = document.getElementById('recent-days');
 const idleSeconds = document.getElementById('idle-seconds');
+const card = document.querySelector('.heatmap-card');
+const chartScroll = document.querySelector('.chart-scroll');
+const olderPage = document.getElementById('older-page');
+const newerPage = document.getElementById('newer-page');
 const SAVE_RETRY_MS = 10000;
+let selectedPage = 0;
+let displayedResult;
 let host;
 let tracker;
 let idle;
@@ -24,21 +30,46 @@ function describe(day) {
   return `${day.delta} · 已结算`;
 }
 
+function updateChartLayout() {
+  // Leave room for weekday labels, gaps and the pending cell's outline.
+  const cellSize = Math.max(10, Math.floor((chartScroll.clientWidth - 4 - 28 - 52 * 3) / 53 * 1000) / 1000);
+  const size = `${cellSize}px`;
+  if (card.style.getPropertyValue('--cell-size') !== size) card.style.setProperty('--cell-size', size);
+  for (const label of months.children) {
+    label.style.visibility = label.scrollWidth > label.clientWidth ? 'hidden' : 'visible';
+  }
+}
+
+function renderMonths(dates) {
+  months.replaceChildren();
+  const boundaries = [];
+  dates.forEach((date, index) => {
+    if (index !== 0 && !date.endsWith('-01')) return;
+    const column = Math.floor(index / 7);
+    const month = date.slice(0, 7);
+    // A partial opening month may share a column with the next month.
+    if (boundaries.at(-1)?.column === column) boundaries.pop();
+    boundaries.push({ column, month });
+  });
+  boundaries.forEach(({ column, month }, index) => {
+    const label = document.createElement('span');
+    const yearBoundary = Number(month.slice(5)) === 1;
+    label.textContent = `${yearBoundary ? `${month.slice(0, 4)}年` : ''}${Number(month.slice(5))}月`;
+    if (yearBoundary) label.className = 'year-boundary';
+    label.style.gridColumn = `${column + 1} / span ${(boundaries[index + 1]?.column ?? 53) - column}`;
+    months.append(label);
+  });
+}
+
 function render(result = { state: null, today: localDate(), savedContributions: null }) {
+  displayedResult = result;
   const { state, today } = result;
-  const dates = calendarDates(state?.startedOn ?? today, today);
+  const { dates, pageIndex, pageCount } = calendarPage(state?.startedOn ?? today, today, selectedPage);
+  selectedPage = pageIndex;
   const thresholds = colorThresholds(state?.history || {});
   grid.replaceChildren();
-  months.replaceChildren();
-  let previousMonth = '';
-  dates.forEach((date, index) => {
-    if (index % 7 === 0) {
-      const month = date.slice(0, 7);
-      const label = document.createElement('span');
-      label.textContent = month !== previousMonth ? `${Number(month.slice(5))}月` : '';
-      months.append(label);
-      previousMonth = month;
-    }
+  renderMonths(dates);
+  dates.forEach(date => {
     const day = dayActivity(state, date, today);
     const level = day.status === 'settled' || day.status === 'pending' ? colorLevel(day.delta, thresholds) : 0;
     const cell = document.createElement('span');
@@ -51,6 +82,11 @@ function render(result = { state: null, today: localDate(), savedContributions: 
   });
   grid.setAttribute('aria-label', `${dates[0]} 至 ${dates.at(-1)} 的每日编辑活跃度；绿色表示贡献次数，今天随贡献次数更新颜色，蓝色轮廓表示当天未结算。`);
   document.getElementById('date-range').textContent = `${today} · 本地日期`;
+  document.getElementById('visible-range').textContent = `${dates[0]} 至 ${dates.at(-1)}`;
+  document.getElementById('pagination').hidden = pageCount === 1;
+  document.getElementById('page-number').textContent = `${pageIndex + 1} / ${pageCount}`;
+  olderPage.disabled = pageIndex === pageCount - 1;
+  newerPage.disabled = pageIndex === 0;
   document.getElementById('latest-contributions').textContent = state?.latestContributions ?? '—';
   document.getElementById('saved-contributions').textContent = result.savedContributions ?? '—';
   document.getElementById('baseline-contributions').textContent = state?.baselineContributions ?? '—';
@@ -70,7 +106,19 @@ function render(result = { state: null, today: localDate(), savedContributions: 
     }
     recent.append(row);
   }
+  updateChartLayout();
 }
+
+function changePage(offset) {
+  if (disposed) return;
+  selectedPage += offset;
+  render(displayedResult);
+  chartScroll.scrollLeft = 0;
+  host?.resize().catch(() => {});
+}
+
+olderPage.addEventListener('click', () => changePage(1));
+newerPage.addEventListener('click', () => changePage(-1));
 
 function showError(error) {
   if (disposed) return;
@@ -121,14 +169,11 @@ function checkDay() {
 
 render();
 async function start() {
-  if (LOCAL_PREVIEW) {
-    status.textContent = '本地外观预览，无飞书数据。文档变化和贡献存储需在飞书宿主中验证。';
-    return;
-  }
   let stopListening;
   let heightTimer;
   let dayTimer;
   let idleTimer;
+  let layoutFrame;
   let observer;
   function cleanup() {
     if (disposed) return;
@@ -138,19 +183,31 @@ async function start() {
     clearTimeout(heightTimer);
     clearInterval(dayTimer);
     clearInterval(idleTimer);
+    cancelAnimationFrame(layoutFrame);
     observer?.disconnect();
     document.removeEventListener('visibilitychange', checkDay);
     Promise.resolve().then(() => stopListening?.()).catch(() => {}).finally(() => host?.destroy());
   }
   window.addEventListener('pagehide', cleanup, { once: true });
-  try {
-    host = await connectFeishu();
-    if (disposed) { host.destroy(); return; }
-    observer = new ResizeObserver(() => {
+  observer = new ResizeObserver(() => {
+    cancelAnimationFrame(layoutFrame);
+    // Changing observed dimensions inside the callback would trigger a resize loop.
+    layoutFrame = requestAnimationFrame(() => {
+      if (disposed) return;
+      updateChartLayout();
+      if (!host) return;
       clearTimeout(heightTimer);
       heightTimer = setTimeout(() => host.resize().catch(() => {}), 150);
     });
-    observer.observe(document.querySelector('.heatmap-card'));
+  });
+  observer.observe(card);
+  if (LOCAL_PREVIEW) {
+    status.textContent = '本地外观预览，无飞书数据。文档变化和贡献存储需在飞书宿主中验证。';
+    return;
+  }
+  try {
+    host = await connectFeishu();
+    if (disposed) { host.destroy(); return; }
     tracker = createTracker({ ...host, onChange: result => {
       if (!disposed) { render(result); host.resize().catch(() => {}); }
     } });

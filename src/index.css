@@ -3,7 +3,7 @@
   color: #1f2328;
   background: #fff;
   --cell-size: 14px;
-  --gap: 4px;
+  --gap: 3px;
   --level-0: #ebedf0;
   --level-1: #9be9a8;
   --level-2: #40c463;
@@ -15,36 +15,45 @@
 body { margin: 0; }
 
 .heatmap-card {
+  width: 100%;
   padding: 16px;
-  max-width: 560px;
-  margin: 0 auto;
 }
 
 .header {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: baseline;
   gap: 12px;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
 }
 
-h1 { margin: 0; font-size: 14px; font-weight: 600; }
+h1 { margin: 0; font-size: 15px; line-height: 1.5; font-weight: 600; }
 .note { font-size: 12px; color: #656d76; white-space: nowrap; }
-.chart-scroll { overflow-x: auto; padding-bottom: 6px; }
+.chart-toolbar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px 16px; margin-bottom: 12px; }
+.pagination { display: flex; align-items: center; gap: 10px; }
+.pagination[hidden] { display: none; }
+.pagination .note { min-width: 36px; text-align: center; font-variant-numeric: tabular-nums; }
+.pagination button { border: 1px solid #d0d7de; border-radius: 5px; padding: 4px 10px; background: #fff; color: #1f2328; font: inherit; font-size: 12px; line-height: 1.5; cursor: pointer; }
+.pagination button:hover:not(:disabled) { background: #f6f8fa; border-color: #8c959f; }
+.pagination button:disabled { color: #8c959f; background: #f6f8fa; cursor: default; }
+.pagination button:focus-visible { outline: 2px solid #0969da; outline-offset: 2px; }
+.chart-scroll { overflow-x: auto; padding: 2px; }
 .chart { width: max-content; }
 
 .months {
   display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: var(--cell-size);
+  grid-template-columns: repeat(53, var(--cell-size));
   gap: var(--gap);
   margin: 0 0 8px 28px;
   font-size: 11px;
-  height: 14px;
+  height: 16px;
+  line-height: 16px;
   color: #656d76;
 }
 
-.months span { white-space: nowrap; }
+.months span { min-width: 0; white-space: nowrap; overflow: hidden; }
+.months .year-boundary { font-size: 10px; font-weight: 500; }
 .calendar { display: flex; gap: 8px; }
 
 .weekdays {
@@ -52,6 +61,7 @@ h1 { margin: 0; font-size: 14px; font-weight: 600; }
   grid-template-rows: repeat(7, var(--cell-size));
   gap: var(--gap);
   width: 20px;
+  flex-shrink: 0;
   font-size: 10px;
   line-height: var(--cell-size);
   color: #656d76;
@@ -69,7 +79,7 @@ h1 { margin: 0; font-size: 14px; font-weight: 600; }
   display: inline-block;
   width: var(--cell-size);
   height: var(--cell-size);
-  border-radius: 2px;
+  border-radius: 3px;
   box-shadow: inset 0 0 0 1px rgba(27, 31, 35, 0.06);
 }
 
@@ -84,7 +94,7 @@ h1 { margin: 0; font-size: 14px; font-weight: 600; }
   justify-content: flex-end;
   align-items: center;
   gap: var(--gap);
-  margin-top: 6px;
+  margin-top: 8px;
   font-size: 11px;
   color: #656d76;
 }
@@ -93,8 +103,8 @@ h1 { margin: 0; font-size: 14px; font-weight: 600; }
 
 .cell.pending { outline: 1px solid #0969da; outline-offset: 1px; }
 .cell.future { opacity: 0.35; }
-.explanation { color: #656d76; font-size: 11px; line-height: 1.6; margin: 12px 0; }
-.debug { border-top: 1px solid #d0d7de; margin-top: 16px; padding-top: 12px; font-size: 12px; }
+.explanation { color: #656d76; font-size: 12px; line-height: 1.7; margin: 10px 0 0; }
+.debug { border-top: 1px solid #eaeef2; margin-top: 16px; padding-top: 12px; font-size: 12px; }
 .debug summary { cursor: pointer; font-weight: 600; }
 .debug summary:focus-visible { outline: 2px solid #0969da; outline-offset: 4px; border-radius: 2px; }
 h2, h3 { font-size: 12px; margin: 0 0 10px; }
@@ -108,4 +118,4 @@ dd { margin: 4px 0 0; font-variant-numeric: tabular-nums; overflow-wrap: anywher
 table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
 th, td { text-align: left; padding: 5px 6px; border-bottom: 1px solid #eaeef2; }
 th { color: #656d76; font-size: 11px; font-weight: 500; }
-@media (max-width: 360px) { .header { flex-wrap: wrap; gap: 6px; } .metrics { grid-template-columns: 1fr; } }
+@media (max-width: 360px) { .header { gap: 6px; } .metrics { grid-template-columns: 1fr; } }

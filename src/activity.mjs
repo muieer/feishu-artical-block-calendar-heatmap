@@ -110,10 +110,19 @@ export function dayActivity(state, date, today) {
   return { status: 'no-data', delta: null };
 }
 
-export function calendarDates(startedOn, today = startedOn, weeks = 26) {
+export function calendarPage(startedOn, today = startedOn, pageIndex = 0, weeks = 53) {
   const weekday = new Date(`${startedOn}T12:00:00Z`).getUTCDay();
   const start = addDays(startedOn, -weekday);
   const elapsedDays = (new Date(`${today}T12:00:00Z`) - new Date(`${start}T12:00:00Z`)) / 86400000;
-  const visibleWeeks = Math.max(weeks, Math.floor(elapsedDays / 7) + 1);
-  return Array.from({ length: visibleWeeks * 7 }, (_, index) => addDays(start, index));
+  const totalWeeks = Math.max(weeks, Math.floor(elapsedDays / 7) + 1);
+  const pageCount = Math.ceil(totalWeeks / weeks);
+  const effectivePage = Math.max(0, Math.min(pageIndex, pageCount - 1));
+  // Clamp the oldest page to the enabled week, retaining a full page of dates.
+  const firstWeek = Math.max(0, totalWeeks - weeks * (effectivePage + 1));
+  const dates = Array.from({ length: weeks * 7 }, (_, index) => addDays(start, firstWeek * 7 + index));
+  return { dates, pageIndex: effectivePage, pageCount };
+}
+
+export function calendarDates(startedOn, today = startedOn, weeks = 53) {
+  return calendarPage(startedOn, today, 0, weeks).dates;
 }
