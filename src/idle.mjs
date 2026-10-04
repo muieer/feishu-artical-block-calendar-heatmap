@@ -18,6 +18,7 @@ export function createIdleScheduler({ presave, confirm, onActivity = () => {}, r
   let timer;
   let idleMs = contributionIdleMs(contributionIdleMinutes);
   let pending = restored ? { ...restored } : null;
+  let lastChangedAt = pending?.lastChangedAt ?? null;
   let presaved = Boolean(restored);
   let needsSave = false;
   let disposed = false;
@@ -62,6 +63,7 @@ export function createIdleScheduler({ presave, confirm, onActivity = () => {}, r
     pending = pending ? { ...pending, lastChangedAt: now(), date: presaved ? pending.date : localDate(dateNow()) }
       : { id: createId(), lastChangedAt: now(), date: localDate(dateNow()) };
     needsSave = true;
+    lastChangedAt = pending.lastChangedAt;
     notify(onActivity, pending);
     clearTimer(timer);
     arm();
@@ -81,6 +83,7 @@ export function createIdleScheduler({ presave, confirm, onActivity = () => {}, r
       arm();
     },
     hasPending: () => pending !== null,
+    lastEditedAt: () => lastChangedAt,
     idleSeconds: () => pending ? Math.max(0, Math.floor((now() - pending.lastChangedAt) / 1000)) : null,
     dispose() { disposed = true; pending = null; clearTimer(timer); },
   };

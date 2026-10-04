@@ -10,6 +10,7 @@ const months = document.getElementById('months');
 const status = document.getElementById('status');
 const recent = document.getElementById('recent-days');
 const idleSeconds = document.getElementById('idle-seconds');
+const lastEditedAt = document.getElementById('last-edited-at');
 const card = document.querySelector('.heatmap-card');
 const chartScroll = document.querySelector('.chart-scroll');
 const olderPage = document.getElementById('older-page');
@@ -27,6 +28,19 @@ let disposed = false;
 let previewReady = false;
 let previewContributionIdleMinutes = DEFAULT_CONTRIBUTION_IDLE_MINUTES;
 let statusMode = 'connecting';
+
+function renderEditingTiming() {
+  idleSeconds.textContent = idle?.idleSeconds() ?? '—';
+  const timestamp = idle?.lastEditedAt();
+  if (timestamp == null) {
+    lastEditedAt.textContent = '—';
+    return;
+  }
+  const date = new Date(timestamp);
+  lastEditedAt.textContent = `${localDate(date)} ${date.toLocaleTimeString('zh-CN', {
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+  })}`;
+}
 
 const ruleButtons = CONTRIBUTION_IDLE_MINUTES.map(minutes => {
   const button = document.createElement('button');
@@ -297,7 +311,7 @@ async function start() {
     tracker = createTracker({ ...host, onChange: result => {
       if (!disposed) {
         idle?.setContributionIdleMinutes(result.state.contributionIdleMinutes);
-        idleSeconds.textContent = idle?.idleSeconds() ?? '—';
+        renderEditingTiming();
         render(result);
         host.resize().catch(() => {});
       }
@@ -314,12 +328,13 @@ async function start() {
     });
     stopListening = await host.listen(event => {
       if (!idle.activity(event)) return;
-      idleSeconds.textContent = '0';
+      renderEditingTiming();
       statusMode = 'editing';
       renderStatus();
     });
     if (disposed) { await stopListening(); return; }
-    idleTimer = setInterval(() => { idleSeconds.textContent = idle.idleSeconds() ?? '—'; }, 1000);
+    renderEditingTiming();
+    idleTimer = setInterval(renderEditingTiming, 1000);
     dayTimer = setInterval(checkDay, 30000);
     document.addEventListener('visibilitychange', checkDay);
     await persist(() => tracker.save());
