@@ -6,6 +6,7 @@ import { STATE_KEY } from '../src/activity.mjs';
 import { CONTRIBUTION_IDLE_MINUTES, contributionIdleMs } from '../src/contribution.mjs';
 
 const change = { changes: [{ type: 'update', blockId: 1 }] };
+const silentChange = { changes: [{ type: 'update', blockId: 976, from: 'silence' }] };
 function fixture(callbacks = {}, options = {}) {
   let clock = 0;
   let nextId = 0;
@@ -45,10 +46,81 @@ function fixture(callbacks = {}, options = {}) {
 
 test('无编辑和无效事件即使等待一分钟也不计贡献', async () => {
   const f = fixture();
-  for (const event of [undefined, {}, { changes: [] }, { changes: [{ type: 'selection' }] }]) f.scheduler.activity(event);
+  for (const event of [undefined, null, {}, { changes: null }, { changes: {} }, { changes: [] },
+    { changes: [null, undefined, {}, { type: 'selection', from: 'local' }] }]) {
+    assert.equal(f.scheduler.activity(event), false);
+  }
   await f.advance(60000);
   assert.deepEqual(f.calls, []);
   assert.equal(f.scheduler.idleSeconds(), null);
+});
+
+test('连续多批静默增删改不启动编辑段或调用保存', async () => {
+  const f = fixture();
+  for (const type of ['insert', 'remove', 'update']) {
+    assert.equal(f.scheduler.activity({ changes: [{ type, from: 'silence' }] }), false);
+    await f.advance(5000);
+  }
+  assert.equal(f.scheduler.activity({ changes: [
+    { type: 'insert', from: 'silence' }, { type: 'remove', from: 'silence' },
+    { type: 'update', blockId: 976, from: 'silence' },
+  ] }), false);
+  await f.advance(60000);
+  assert.deepEqual(f.calls, []);
+  assert.equal(f.scheduler.hasPending(), false);
+  assert.equal(f.scheduler.idleSeconds(), null);
+});
+
+for (const type of ['insert', 'remove', 'update']) {
+  for (const from of ['local', 'remote', undefined, 'future-source']) {
+    test(`${type} 来源 ${from ?? '缺失'} 保留 10 秒预保存`, async () => {
+      const f = fixture();
+      const entry = from === undefined ? { type } : { type, from };
+      assert.equal(f.scheduler.activity({ changes: [entry] }), true);
+      await f.advance(9999);
+      assert.equal(f.saves().length, 0);
+      await f.advance(1);
+      assert.equal(f.saves().length, 1);
+      assert.equal(f.saves()[0].clock, 10000);
+      f.scheduler.dispose();
+    });
+  }
+}
+
+test('混合批次保留正常编辑，与静默条目的顺序无关', async () => {
+  for (const reverse of [false, true]) {
+    const f = fixture();
+    const changes = [null, ...silentChange.changes, { type: 'selection' },
+      { type: 'insert', from: 'local' }, { type: 'remove', from: 'remote' }];
+    assert.equal(f.scheduler.activity({ changes: reverse ? changes.reverse() : changes }), true);
+    await f.advance(60000);
+    assert.equal(f.calls.filter(call => call.type === 'onActivity').length, 1);
+    assert.equal(f.saves().length, 1);
+    assert.equal(f.finishes().length, 1);
+  }
+});
+
+test('静默事件不更新编辑时间，不推迟预保存和结束边界', async () => {
+  const f = fixture();
+  f.scheduler.activity(change);
+  await f.advance(5000);
+  assert.equal(f.scheduler.activity(silentChange), false);
+  assert.equal(f.scheduler.idleSeconds(), 5);
+  await f.advance(4999);
+  assert.equal(f.saves().length, 0);
+  await f.advance(1);
+  assert.equal(f.saves()[0].clock, 10000);
+  assert.equal(f.saves()[0].session.lastChangedAt, f.now().getTime() - 10000);
+  await f.advance(45000);
+  assert.equal(f.scheduler.activity(silentChange), false);
+  assert.equal(f.scheduler.idleSeconds(), 55);
+  await f.advance(4999);
+  assert.equal(f.finishes().length, 0);
+  await f.advance(1);
+  assert.equal(f.finishes()[0].clock, 60000);
+  assert.equal(f.calls.filter(call => call.type === 'onActivity').length, 1);
+  assert.equal(f.saves().length, 1);
+  assert.equal(f.scheduler.hasPending(), false);
 });
 
 for (const minutes of CONTRIBUTION_IDLE_MINUTES) {
@@ -231,6 +303,57 @@ function integration() {
   };
   return { f, open, data: () => data, tracker: () => tracker };
 }
+
+test('事件到存储：静默加载不改统计，正常编辑仍只计一次', async () => {
+  const i = integration();
+  await i.open();
+  await i.tracker().save();
+  const initial = structuredClone(i.data());
+  for (let batch = 0; batch < 6; batch++) {
+    assert.equal(i.f.scheduler.activity(silentChange), false);
+    await i.f.advance(1000);
+  }
+  await i.f.advance(60000);
+  assert.deepEqual(i.data(), initial);
+  assert.equal(i.tracker().snapshot().state.latestContributions, 0);
+  assert.deepEqual(i.f.calls, []);
+  assert.equal(i.f.scheduler.activity({ changes: [{ type: 'update', from: 'local' }] }), true);
+  await i.f.advance(10000);
+  assert.equal(i.data()[STATE_KEY].latestContributions, 1);
+  const presaved = structuredClone(i.data());
+  assert.equal(i.f.scheduler.activity(silentChange), false);
+  await i.f.advance(0);
+  assert.deepEqual(i.data(), presaved);
+  await i.f.advance(50000);
+  assert.equal(i.data()[STATE_KEY].latestContributions, 1);
+  assert.equal(i.data()[STATE_KEY].pendingContribution, undefined);
+});
+
+test('恢复已有编辑段后静默加载不延长计时或新增贡献', async () => {
+  const i = integration();
+  await i.open();
+  i.f.scheduler.activity(change);
+  await i.f.advance(10000);
+  const pending = structuredClone(i.data()[STATE_KEY].pendingContribution);
+  i.f.scheduler.dispose();
+  await i.f.advance(30000);
+  const reopened = await i.open();
+  const resumed = i.f.create(reopened.snapshot().state.pendingContribution);
+  assert.equal(resumed.activity(silentChange), false);
+  await i.f.advance(0);
+  assert.equal(resumed.idleSeconds(), 40);
+  assert.deepEqual(i.data()[STATE_KEY].pendingContribution, pending);
+  await i.f.advance(19000);
+  assert.equal(resumed.activity(silentChange), false);
+  assert.equal(i.f.finishes().length, 0);
+  await i.f.advance(1_000);
+  assert.equal(i.f.finishes()[0].clock, 60000);
+  assert.equal(resumed.hasPending(), false);
+  assert.equal(i.data()[STATE_KEY].latestContributions, 1);
+  assert.equal(i.data()[STATE_KEY].pendingContribution, undefined);
+  assert.equal(i.f.saves().length, 1);
+  assert.equal(i.f.calls.filter(call => call.type === 'onActivity').length, 1);
+});
 
 test('事件到存储：反复预保存和最终确认只加一，下一段贡献再加一', async () => {
   const i = integration();

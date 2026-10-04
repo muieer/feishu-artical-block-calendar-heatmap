@@ -4,8 +4,11 @@ import { DEFAULT_CONTRIBUTION_IDLE_MINUTES, contributionIdleMs } from './contrib
 export const PRESAVE_IDLE_MS = 10000;
 
 export function isDocumentContentChange(event) {
+  // Web runtime emits silence changes during model hydration.
+  // from is absent from public API docs and SDK 0.0.11 types; preserve other origins.
   return Array.isArray(event?.changes)
-    && event.changes.some(change => ['insert', 'remove', 'update'].includes(change?.type));
+    && event.changes.some(change => change?.from !== 'silence'
+      && ['insert', 'remove', 'update'].includes(change?.type));
 }
 
 export function createIdleScheduler({ presave, confirm, onActivity = () => {}, restored = null,
