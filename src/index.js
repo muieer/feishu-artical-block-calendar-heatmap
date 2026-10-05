@@ -68,34 +68,34 @@ function sessionStatus() {
   const minutes = currentContributionIdleMinutes();
   if (idle?.hasPending() ?? Boolean(displayedResult?.state?.pendingContribution)) {
     return displayedResult?.state?.pendingContribution
-      ? `本次贡献已预保存；继续编辑仍计为同一次，连续空闲 ${minutes} 分钟后结束。`
-      : `检测到文档变化，空闲 10 秒后预保存，连续空闲 ${minutes} 分钟后结束本次编辑。`;
+      ? `本次编辑次数已保存。停止编辑未满 ${minutes} 分钟时继续编辑，仍计为同一次。`
+      : `已检测到编辑。停止编辑 10 秒后，会记录并保存本次编辑次数。`;
   }
-  return '正在监听文档变化。';
+  return '编辑文档后，会自动记录编辑次数。';
 }
 
 function renderStatus() {
   if (status.classList.contains('error') || statusMode === 'connecting') return;
   const minutes = currentContributionIdleMinutes();
   if (statusMode === 'preview') {
-    status.textContent = `本地外观预览，当前计时规则为 ${minutes} 分钟，仅在本页面生效，未写入飞书数据。文档变化和贡献存储需在飞书宿主中验证。`;
+    status.textContent = `当前为预览模式，编辑间隔为 ${minutes} 分钟。设置仅在当前页面生效，不会保存到飞书。请在飞书文档中使用小组件记录编辑次数。`;
   } else if (statusMode === 'configuration-saving') {
-    status.textContent = `正在保存计时规则到 Interaction，当前规则为 ${minutes} 分钟。`;
+    status.textContent = `正在保存设置，编辑间隔为 ${minutes} 分钟。`;
   } else if (statusMode === 'configuration-saved') {
-    status.textContent = `计时规则已保存到 Interaction，当前规则为 ${minutes} 分钟。${sessionStatus()}`;
+    status.textContent = `设置已保存，编辑间隔为 ${minutes} 分钟。${sessionStatus()}`;
   } else if (statusMode === 'contribution-saving') {
-    status.textContent = '正在保存贡献次数到 Interaction…';
+    status.textContent = '正在保存编辑次数…';
   } else {
     status.textContent = statusMode === 'contribution-saved'
-      ? `贡献次数已保存到 Interaction。${sessionStatus()}` : sessionStatus();
+      ? `编辑次数已保存。${sessionStatus()}` : sessionStatus();
   }
 }
 
 function describe(day) {
-  if (day.status === 'pending') return `${day.delta} · pending（未结算）`;
-  if (day.status === 'no-data') return '无数据';
+  if (day.status === 'pending') return `${day.delta} · 统计中`;
+  if (day.status === 'no-data') return '暂无记录';
   if (day.status === 'future') return '未来日期';
-  return `${day.delta} · 已结算`;
+  return `${day.delta} · 已完成`;
 }
 
 function updateChartLayout() {
@@ -137,9 +137,11 @@ function renderControls(result) {
     button.disabled = disposed || !(result.loaded || previewReady) || selected;
     button.setAttribute('aria-pressed', String(selected));
   }
-  document.getElementById('contribution-rule-explanation').textContent = `空闲 10 秒时贡献加 1 并预保存到 Interaction；${minutes} 分钟内继续编辑仍计为同一次，连续空闲 ${minutes} 分钟后结束。保存失败会自动重试；pending 表示当天未结算。`;
+  document.getElementById('contribution-rule-explanation').textContent = `停止编辑 10 秒后，编辑次数增加 1 并保存。停止编辑未满 ${minutes} 分钟时继续编辑，仍计为同一次；停止编辑达到 ${minutes} 分钟后，再次编辑会另计一次。保存失败会自动重试。今日次数会继续更新，次日确定最终次数。`;
   renderStatus();
-  document.getElementById('latest-contributions').textContent = state?.latestContributions ?? '—';
+  const latestContributions = state?.latestContributions ?? '—';
+  document.getElementById('contribution-summary').textContent = `最近一年共有 ${latestContributions} 次编辑`;
+  document.getElementById('latest-contributions').textContent = latestContributions;
   document.getElementById('saved-contributions').textContent = result.savedContributions ?? '—';
   document.getElementById('baseline-contributions').textContent = state?.baselineContributions ?? '—';
   document.getElementById('live-delta').textContent = state?.currentDate === today ? state.latestContributions - state.baselineContributions : '—';
@@ -172,13 +174,11 @@ function renderChart({ state, today }) {
     cell.className = `cell level-${level} ${day.status}`;
     cell.dataset.date = date;
     cell.dataset.status = day.status;
-    cell.title = `${date}：贡献次数 ${describe(day)}`;
+    cell.title = `${date}：编辑次数 ${describe(day)}`;
     cell.setAttribute('aria-hidden', 'true');
     grid.append(cell);
   });
-  grid.setAttribute('aria-label', `${dates[0]} 至 ${dates.at(-1)} 的每日编辑活跃度；绿色表示贡献次数，今天随贡献次数更新颜色，蓝色轮廓表示当天未结算。`);
-  document.getElementById('date-range').textContent = `${today} · 本地日期`;
-  document.getElementById('visible-range').textContent = `${dates[0]} 至 ${dates.at(-1)}`;
+  grid.setAttribute('aria-label', `${dates[0]} 至 ${dates.at(-1)} 的每日编辑活跃度；绿色表示编辑次数，今天随编辑次数更新颜色，蓝色轮廓表示今日次数仍在更新。`);
   document.getElementById('pagination').hidden = pageCount === 1;
   document.getElementById('page-number').textContent = `${pageIndex + 1} / ${pageCount}`;
   olderPage.disabled = pageIndex === pageCount - 1;
@@ -188,7 +188,7 @@ function renderChart({ state, today }) {
     const date = addDays(today, offset);
     const day = dayActivity(state, date, today);
     const row = document.createElement('tr');
-    for (const value of [date, day.delta ?? '—', date === today ? 'pending' : day.status === 'settled' ? '已结算' : '无数据']) {
+    for (const value of [date, day.delta ?? '—', date === today ? '统计中' : day.status === 'settled' ? '已完成' : '暂无记录']) {
       const cell = document.createElement('td');
       cell.textContent = value;
       row.append(cell);
@@ -218,7 +218,23 @@ newerPage.addEventListener('click', () => changePage(-1));
 
 function showError(error) {
   if (disposed) return;
-  status.textContent = error.message || '读取或保存失败。';
+  const messages = {
+    'Interaction 返回的数据格式无效，已停止统计写入。': '读取的编辑记录格式有误，已停止保存统计数据。',
+    'Interaction 读取超时，未写入或重置统计数据。请重新加载小组件；若持续超时，检查 useInteraction 配置和宿主请求错误。': '读取编辑记录超时，统计数据未被修改或重置。请重新加载小组件；若仍无法读取，请联系小组件维护者。',
+    'Interaction 统计数据格式无效，已保留原数据。': '编辑记录格式有误，原有记录已保留。',
+    'Interaction 统计结构无效，已保留原数据。': '编辑记录结构有误，原有记录已保留。',
+    '保存的贡献次数无效，已保留原数据。': '已保存的编辑次数有误，原有记录已保留。',
+    '历史结算数据无效，已保留原数据。': '历史编辑记录有误，原有记录已保留。',
+    '历史贡献次数与当日基线不一致，已保留原数据。': '历史编辑次数与今日开始前的累计次数不一致，原有记录已保留。',
+    '预保存贡献状态无效，已保留原数据。': '本次编辑记录的状态有误，原有记录已保留。',
+    '贡献计时规则无效，仅支持 1、3、5、10、30、60 分钟，已保留原数据。': '编辑间隔设置有误，仅支持 1、3、5、10、30、60 分钟，原有记录已保留。',
+    '本地日期早于当前统计日期，暂停结算；请检查时区或系统日期。': '设备日期早于当前统计日期，已暂停确定每日编辑次数。请检查设备的时区和日期设置。',
+    '贡献日期不能晚于本地今天，且必须是有效日期。': '编辑日期有误，日期不能晚于设备的当前日期。',
+    '贡献日期不在已启用的统计区间内。': '编辑日期不在已开始记录的日期范围内。',
+    '贡献次数已达到安全整数上限。': '编辑次数已达到支持的最大值。',
+  };
+  status.textContent = Object.hasOwn(messages, error.message)
+    ? messages[error.message] : error.message || '读取或保存编辑记录失败。';
   status.classList.add('error');
 }
 

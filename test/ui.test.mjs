@@ -146,18 +146,24 @@ test(`页面从启用周展开：${startedOn}；计数和失败重试正常`, as
   assert.equal(getElementById('page-number').textContent, `1 / ${page.pageCount}`);
   assert.equal(getElementById('newer-page').disabled, true);
   assert.equal(getElementById('older-page').disabled, page.pageCount === 1);
-  assert.equal(getElementById('visible-range').textContent, `${page.dates[0]} 至 ${page.dates.at(-1)}`);
+  assert.equal(getElementById('contribution-summary').textContent, '最近一年共有 0 次编辑');
   assert.equal(getElementById('recent-days').children.length, 7);
   assert.equal(getElementById('baseline-contributions').textContent, '0');
   assert.equal(getElementById('latest-contributions').textContent, '0');
   assert.equal(getElementById('saved-contributions').textContent, '0');
+  assert.match(getElementById('status').textContent, /编辑文档后，会自动记录编辑次数/);
+  assert.equal(cells[todayIndex].title, `${today}：编辑次数 0 · 统计中`);
+  assert.match(getElementById('heatmap').getAttribute('aria-label'), /蓝色轮廓表示今日次数仍在更新/);
+  assert.equal(getElementById('recent-days').children.at(-1).children[2].textContent, '统计中');
   assert.deepEqual(Object.keys(data()), [activity.STATE_KEY]);
   context.failWrite = true;
   edit();
+  assert.equal(getElementById('status').textContent, '已检测到编辑。停止编辑 10 秒后，会记录并保存本次编辑次数。');
   await advance(9999);
   assert.equal(getElementById('latest-contributions').textContent, '0');
   await advance(1);
   assert.equal(getElementById('latest-contributions').textContent, '1');
+  assert.equal(getElementById('contribution-summary').textContent, '最近一年共有 1 次编辑');
   assert.equal(getElementById('saved-contributions').textContent, '0');
   assert.equal(getElementById('heatmap').children[todayIndex].className, 'cell level-1 pending');
   assert.equal(getElementById('status').classList.contains('error'), true);
@@ -168,7 +174,7 @@ test(`页面从启用周展开：${startedOn}；计数和失败重试正常`, as
   assert.equal(getElementById('live-delta').textContent, '1');
   assert.equal(getElementById('heatmap').children[todayIndex].className, 'cell level-1 pending');
   assert.equal(getElementById('recent-days').children.at(-1).children[1].textContent, '1');
-  assert.match(getElementById('status').textContent, /预保存/);
+  assert.match(getElementById('status').textContent, /本次编辑次数已保存/);
   edit();
   await advance(10000);
   assert.equal(getElementById('latest-contributions').textContent, '1');
@@ -225,8 +231,8 @@ test('六档按钮默认选中 1 分钟，切换更新文案、存储和当前�
   assert.equal(f.rule(1).disabled, false);
   assert.equal(f.rule(1).getAttribute('aria-pressed'), 'false');
   assert.equal(f.data()[activity.STATE_KEY].contributionIdleMinutes, 3);
-  assert.match(f.getElementById('contribution-rule-explanation').textContent, /3 分钟内.*空闲 3 分钟/);
-  assert.match(f.getElementById('status').textContent, /计时规则已保存.*3 分钟.*预保存.*3 分钟/);
+  assert.match(f.getElementById('contribution-rule-explanation').textContent, /未满 3 分钟.*达到 3 分钟/);
+  assert.match(f.getElementById('status').textContent, /设置已保存.*3 分钟.*本次编辑次数已保存.*3 分钟/);
   assert.doesNotMatch(f.getElementById('status').textContent, /已结束/);
   await f.advance(60000);
   assert.ok(f.data()[activity.STATE_KEY].pendingContribution);
@@ -236,7 +242,7 @@ test('六档按钮默认选中 1 分钟，切换更新文案、存储和当前�
   assert.equal(f.data()[activity.STATE_KEY].latestContributions, 1);
   assert.equal(f.getElementById('idle-seconds').textContent, '—');
   f.edit();
-  assert.match(f.getElementById('status').textContent, /空闲 1 分钟/);
+  assert.match(f.getElementById('status').textContent, /停止编辑 10 秒后/);
   await f.advance(10000);
   assert.equal(f.data()[activity.STATE_KEY].latestContributions, 2);
   await f.close();
@@ -263,7 +269,7 @@ test('配置保存失败保留选择和错误，10 秒后自动重试保存最�
   assert.equal(f.data()[activity.STATE_KEY].contributionIdleMinutes, 5);
   assert.equal(f.data()[activity.STATE_KEY].latestContributions, 0);
   assert.equal(f.getElementById('status').classList.contains('error'), false);
-  assert.match(f.getElementById('status').textContent, /计时规则已保存.*5 分钟/);
+  assert.match(f.getElementById('status').textContent, /设置已保存.*5 分钟/);
   const reopened = await uiFixture({ savedData: f.data() });
   await reopened.flush();
   assert.equal(reopened.rule(5).disabled, true);
@@ -286,15 +292,21 @@ test('加载期间及读取失败禁用所有配置按钮，本地预览切换�
   await failed.flush();
   assert.ok(failed.getElementById('contribution-rules').children.every(button => button.disabled));
   assert.equal(failed.context.writes, 0);
+  assert.equal(failed.getElementById('status').textContent, 'read unavailable');
+  const invalid = await uiFixture({ savedData: { [activity.STATE_KEY]: [] } });
+  await invalid.flush();
+  assert.equal(invalid.getElementById('status').textContent, '编辑记录格式有误，原有记录已保留。');
+  assert.equal(invalid.context.writes, 0);
   const preview = await uiFixture({ preview: true });
   await preview.flush();
   preview.rule(60).click();
   assert.equal(preview.rule(60).disabled, true);
-  assert.match(preview.getElementById('status').textContent, /60 分钟.*未写入飞书数据/);
+  assert.match(preview.getElementById('status').textContent, /60 分钟.*不会保存到飞书/);
   assert.match(preview.getElementById('contribution-rule-explanation').textContent, /60 分钟/);
   assert.equal(preview.context.writes, 0);
   await loading.close();
   await failed.close();
+  await invalid.close();
   await preview.close();
 });
 
@@ -313,7 +325,7 @@ test('缩短规则在慢网络保存完成前结束当前计时，确认接续�
   await f.flush();
   assert.equal(f.rule(1).disabled, true);
   assert.equal(f.getElementById('idle-seconds').textContent, '—');
-  assert.match(f.getElementById('contribution-rule-explanation').textContent, /空闲 1 分钟/);
+  assert.match(f.getElementById('contribution-rule-explanation').textContent, /停止编辑达到 1 分钟/);
   assert.equal(f.data()[activity.STATE_KEY].contributionIdleMinutes, 3);
   release();
   await f.flush();
@@ -349,7 +361,7 @@ test('首次加载与贡献变化各更新一次，慢保存成功仅更新保�
   await f.flush();
   assertChartUnchanged(f, presaved);
   assert.equal(f.getElementById('saved-contributions').textContent, '1');
-  assert.match(f.getElementById('status').textContent, /已保存.*预保存/);
+  assert.match(f.getElementById('status').textContent, /编辑次数已保存.*本次编辑次数已保存/);
   await f.close();
 });
 
@@ -367,7 +379,7 @@ test('预保存后的连续编辑、重复预保存与最终确认保留节点�
     await f.flush();
     assertChartUnchanged(f, before);
     assert.equal(f.getElementById('idle-seconds').textContent, '0');
-    assert.match(f.getElementById('status').textContent, /预保存/);
+    assert.match(f.getElementById('status').textContent, /本次编辑次数已保存/);
   }
   const latest = f.data()[activity.STATE_KEY].pendingContribution;
   assert.equal(latest.id, original.id);
@@ -380,7 +392,7 @@ test('预保存后的连续编辑、重复预保存与最终确认保留节点�
   assert.equal(f.data()[activity.STATE_KEY].pendingContribution, undefined);
   assert.equal(f.data()[activity.STATE_KEY].latestContributions, 1);
   assert.equal(f.getElementById('idle-seconds').textContent, '—');
-  assert.match(f.getElementById('status').textContent, /正在监听/);
+  assert.match(f.getElementById('status').textContent, /编辑文档后，会自动记录编辑次数/);
   f.edit();
   await f.advance(10000);
   assertChartRebuiltOnce(f, before);
@@ -430,7 +442,7 @@ test('配置切换、失败重试和本地预览不重建，缩短规则确认�
   await f.advance(10000);
   assertChartUnchanged(f, before);
   assert.equal(f.data()[activity.STATE_KEY].contributionIdleMinutes, 30);
-  assert.match(f.getElementById('status').textContent, /计时规则已保存.*30 分钟/);
+  assert.match(f.getElementById('status').textContent, /设置已保存.*30 分钟/);
   await f.advance(50000);
   f.rule(1).click();
   await f.flush();
@@ -444,7 +456,7 @@ test('配置切换、失败重试和本地预览不重建，缩短规则确认�
   preview.rule(60).click();
   assertChartUnchanged(preview, previewBefore);
   assert.equal(preview.rule(60).disabled, true);
-  assert.match(preview.getElementById('status').textContent, /60 分钟.*未写入飞书数据/);
+  assert.match(preview.getElementById('status').textContent, /60 分钟.*不会保存到飞书/);
   await f.close();
   await preview.close();
 });
@@ -463,13 +475,14 @@ test('跨日结算只更新一次，重复日期检查与保存保持节点', as
   const cells = f.getElementById('heatmap').children;
   assert.equal(cells.find(cell => cell.dataset.date === f.today).className, 'cell level-1 settled');
   assert.equal(cells.find(cell => cell.dataset.date === nextDay).className, 'cell level-0 pending');
-  assert.equal(f.getElementById('date-range').textContent, `${nextDay} · 本地日期`);
+  assert.equal(f.getElementById('contribution-summary').textContent, '最近一年共有 1 次编辑');
   assert.equal(f.getElementById('baseline-contributions').textContent, '1');
   assert.equal(f.getElementById('live-delta').textContent, '0');
   const rows = f.getElementById('recent-days').children;
-  assert.equal(rows.at(-2).children[2].textContent, '已结算');
+  assert.equal(rows.at(-2).children[2].textContent, '已完成');
   assert.equal(rows.at(-1).children[0].textContent, nextDay);
   assert.equal(rows.at(-1).children[1].textContent, '0');
+  assert.equal(rows.at(-1).children[2].textContent, '统计中');
   const settled = chartSnapshot(f);
   f.visible();
   await f.context.tracker.rollover();
