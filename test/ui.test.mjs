@@ -126,7 +126,7 @@ function assertChartRebuiltOnce(f, before) {
   }
 }
 
-for (const startedOn of ['2026-10-03', '2026-09-01', '2025-09-27', '2024-09-21']) {
+for (const [startedOn, recordedDays] of [['2026-10-03', 1], ['2026-09-01', 33], ['2025-09-27', 372], ['2024-09-21', 743]]) {
 test(`页面从启用周展开：${startedOn}；计数和失败重试正常`, async () => {
   const { today, context, getElementById, flush, advance, data, edit, close } = await uiFixture({ startedOn });
   await flush();
@@ -146,7 +146,7 @@ test(`页面从启用周展开：${startedOn}；计数和失败重试正常`, as
   assert.equal(getElementById('page-number').textContent, `1 / ${page.pageCount}`);
   assert.equal(getElementById('newer-page').disabled, true);
   assert.equal(getElementById('older-page').disabled, page.pageCount === 1);
-  assert.equal(getElementById('contribution-summary').textContent, '最近一年共有 0 次编辑');
+  assert.equal(getElementById('contribution-summary').textContent, `最近 ${recordedDays} 天共有 0 次编辑`);
   assert.equal(getElementById('recent-days').children.length, 7);
   assert.equal(getElementById('baseline-contributions').textContent, '0');
   assert.equal(getElementById('latest-contributions').textContent, '0');
@@ -163,7 +163,7 @@ test(`页面从启用周展开：${startedOn}；计数和失败重试正常`, as
   assert.equal(getElementById('latest-contributions').textContent, '0');
   await advance(1);
   assert.equal(getElementById('latest-contributions').textContent, '1');
-  assert.equal(getElementById('contribution-summary').textContent, '最近一年共有 1 次编辑');
+  assert.equal(getElementById('contribution-summary').textContent, `最近 ${recordedDays} 天共有 1 次编辑`);
   assert.equal(getElementById('saved-contributions').textContent, '0');
   assert.equal(getElementById('heatmap').children[todayIndex].className, 'cell level-1 pending');
   assert.equal(getElementById('status').classList.contains('error'), true);
@@ -475,7 +475,7 @@ test('跨日结算只更新一次，重复日期检查与保存保持节点', as
   const cells = f.getElementById('heatmap').children;
   assert.equal(cells.find(cell => cell.dataset.date === f.today).className, 'cell level-1 settled');
   assert.equal(cells.find(cell => cell.dataset.date === nextDay).className, 'cell level-0 pending');
-  assert.equal(f.getElementById('contribution-summary').textContent, '最近一年共有 1 次编辑');
+  assert.equal(f.getElementById('contribution-summary').textContent, '最近 373 天共有 1 次编辑');
   assert.equal(f.getElementById('baseline-contributions').textContent, '1');
   assert.equal(f.getElementById('live-delta').textContent, '0');
   const rows = f.getElementById('recent-days').children;

@@ -140,7 +140,10 @@ function renderControls(result) {
   document.getElementById('contribution-rule-explanation').textContent = `停止编辑 10 秒后，编辑次数增加 1 并保存。停止编辑未满 ${minutes} 分钟时继续编辑，仍计为同一次；停止编辑达到 ${minutes} 分钟后，再次编辑会另计一次。保存失败会自动重试。今日次数会继续更新，次日确定最终次数。`;
   renderStatus();
   const latestContributions = state?.latestContributions ?? '—';
-  document.getElementById('contribution-summary').textContent = `最近一年共有 ${latestContributions} 次编辑`;
+  const recordedDays = state
+    ? (Date.parse(`${state.currentDate}T12:00:00Z`) - Date.parse(`${state.startedOn}T12:00:00Z`)) / 86400000 + 1
+    : '—';
+  document.getElementById('contribution-summary').textContent = `最近 ${recordedDays} 天共有 ${latestContributions} 次编辑`;
   document.getElementById('latest-contributions').textContent = latestContributions;
   document.getElementById('saved-contributions').textContent = result.savedContributions ?? '—';
   document.getElementById('baseline-contributions').textContent = state?.baselineContributions ?? '—';
